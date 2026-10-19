@@ -1,5 +1,7 @@
 """Project role checks. Membership is CRM data. It is not a Control Plane role."""
 
+from dataclasses import dataclass
+
 PROJECT_MANAGER = "project_manager"
 PROJECT_MEMBER = "project_member"
 SCOPE_PROJECT = "project"
@@ -103,3 +105,47 @@ def scope_for_role(role: str) -> str:
         return ROLE_SCOPE[role]
     except KeyError:
         raise ValueError(role) from None
+
+
+@dataclass(frozen=True)
+class RecordRef:
+    """Input for a future record route. CRM does not store records yet."""
+
+    tenant_id: str
+    project_id: str
+    assignee_user_id: str | None
+
+
+@dataclass(frozen=True)
+class RecordDecision:
+    allowed: bool
+    scope: str | None
+
+
+def decide_record_access(
+    *,
+    caller_user_id: str,
+    authorized_tenant_id: str,
+    authorized_project_id: str,
+    access: ProjectAccess,
+    record: RecordRef,
+) -> RecordDecision:
+    """Decide one record. A later record route must call this on every request.
+
+    A manager may use records in the authorized project. A member may use only
+    records in that project assigned to the caller. Another tenant, another
+    project, a removed membership, and a missing membership are denied. The
+    decision does not include names from the other tenant or project.
+    """
+
+    denied = RecordDecision(allowed=False, scope=None)
+    if record.tenant_id != authorized_tenant_id or record.project_id != authorized_project_id:
+        return denied
+    if not access.allows("access_records"):
+        return denied
+    scope = access.record_scope()
+    if scope == SCOPE_PROJECT:
+        return RecordDecision(allowed=True, scope=SCOPE_PROJECT)
+    if scope == SCOPE_ASSIGNED and record.assignee_user_id == caller_user_id:
+        return RecordDecision(allowed=True, scope=SCOPE_ASSIGNED)
+    return denied

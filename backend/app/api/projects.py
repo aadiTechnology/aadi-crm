@@ -38,7 +38,10 @@ from app.project_access import (
     PROJECT_MEMBER,
     PROJECT_MANAGER,
     ProjectAccess,
+    RecordDecision,
+    RecordRef,
     access_for,
+    decide_record_access,
     module_allowed,
     tenant_project_admin,
 )
@@ -622,6 +625,26 @@ def post_remove_member(
 
 
 def record_access_for_project(connection, tenant_id: str, project_id: str, caller: Caller) -> ProjectAccess:
-    """Contract for a future record route. Records are not implemented in this sprint."""
+    """Membership loaded for this request. Record routes must not cache it."""
 
     return _access_for_user(connection, tenant_id, project_id, caller)
+
+
+def authorize_record(
+    connection,
+    *,
+    tenant_id: str,
+    project_id: str,
+    caller: Caller,
+    record: RecordRef,
+) -> RecordDecision:
+    """Policy a future record route must call. No record module exists yet."""
+
+    access = record_access_for_project(connection, tenant_id, project_id, caller)
+    return decide_record_access(
+        caller_user_id=caller.user_id,
+        authorized_tenant_id=tenant_id,
+        authorized_project_id=project_id,
+        access=access,
+        record=record,
+    )

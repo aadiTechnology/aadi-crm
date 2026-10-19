@@ -4,12 +4,12 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.projects import project_management_allowed, record_access_for_project
+from app.api.projects import Caller, authorize_record, project_management_allowed
 from app.api.shell import get_platform_client
 from app.db import DuplicateProjectCode, apply_migrations, connect, create_project, database_path
 from app.main import create_app
 from app.platform_client import IdentityView, PlatformCallError, ProductAccessView, TenantUserView
-from app.project_access import access_for, tenant_project_admin
+from app.project_access import RecordRef, access_for, decide_record_access, tenant_project_admin
 
 TENANT_A = UUID("11111111-1111-4111-8111-111111111111")
 TENANT_B = UUID("22222222-2222-4222-8222-222222222222")
@@ -416,6 +416,55 @@ def test_record_scope_contract_denies_non_members() -> None:
     assert stranger.allows("view_project") is False
     assert admin.allows("archive_project") is True
     assert admin.record_scope() == "project"
+    own = RecordRef(tenant_id=str(TENANT_A), project_id="project-a", assignee_user_id=OTHER_ID)
+    other_assignee = RecordRef(tenant_id=str(TENANT_A), project_id="project-a", assignee_user_id=USER_ID)
+    unassigned = RecordRef(tenant_id=str(TENANT_A), project_id="project-a", assignee_user_id=None)
+    other_project = RecordRef(tenant_id=str(TENANT_A), project_id="project-b", assignee_user_id=OTHER_ID)
+    other_tenant = RecordRef(tenant_id=str(TENANT_B), project_id="project-a", assignee_user_id=OTHER_ID)
+    manager_decision = decide_record_access(
+        caller_user_id=USER_ID,
+        authorized_tenant_id=str(TENANT_A),
+        authorized_project_id="project-a",
+        access=manager,
+        record=other_assignee,
+    )
+    assert manager_decision.allowed is True
+    assert manager_decision.scope == "project"
+    assigned = decide_record_access(
+        caller_user_id=OTHER_ID,
+        authorized_tenant_id=str(TENANT_A),
+        authorized_project_id="project-a",
+        access=member,
+        record=own,
+    )
+    assert assigned.allowed is True
+    assert assigned.scope == "assigned"
+    for record in (other_assignee, unassigned, other_project, other_tenant):
+        denied = decide_record_access(
+            caller_user_id=OTHER_ID,
+            authorized_tenant_id=str(TENANT_A),
+            authorized_project_id="project-a",
+            access=member,
+            record=record,
+        )
+        assert denied.allowed is False
+        assert denied.scope is None
+    removed_decision = decide_record_access(
+        caller_user_id=USER_ID,
+        authorized_tenant_id=str(TENANT_A),
+        authorized_project_id="project-a",
+        access=removed,
+        record=other_assignee,
+    )
+    assert removed_decision.allowed is False
+    stranger_decision = decide_record_access(
+        caller_user_id=OTHER_ID,
+        authorized_tenant_id=str(TENANT_A),
+        authorized_project_id="project-a",
+        access=stranger,
+        record=own,
+    )
+    assert stranger_decision.allowed is False
 
 
 def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
@@ -660,9 +709,60 @@ def test_project_membership_roles_and_scope(tmp_path, monkeypatch) -> None:
     assert refused.status_code == 403
     assert len(platform.user_lookups) >= lookups_before_directory_block
     connection = connect(database_path())
-    access = record_access_for_project(connection, str(TENANT_A), project_id, type("Caller", (), {"user_id": OTHER_ID, "email": "other@example.com", "keys": [LEADS]})())
-    assert access.record_scope() == "project"
+    manager = Caller(user_id=OTHER_ID, email="other@example.com", keys=[LEADS])
+    assigned_record = RecordRef(tenant_id=str(TENANT_A), project_id=project_id, assignee_user_id=USER_ID)
+    allowed = authorize_record(
+        connection,
+        tenant_id=str(TENANT_A),
+        project_id=project_id,
+        caller=manager,
+        record=assigned_record,
+    )
+    assert allowed.allowed is True
+    assert allowed.scope == "project"
+    removed_caller = Caller(user_id=USER_ID, email="manager@example.com", keys=[LEADS])
+    blocked = authorize_record(
+        connection,
+        tenant_id=str(TENANT_A),
+        project_id=project_id,
+        caller=removed_caller,
+        record=assigned_record,
+    )
+    assert blocked.allowed is False
+    foreign_record = authorize_record(
+        connection,
+        tenant_id=str(TENANT_A),
+        project_id=project_id,
+        caller=manager,
+        record=RecordRef(tenant_id=str(TENANT_B), project_id=project_id, assignee_user_id=OTHER_ID),
+    )
+    assert foreign_record.allowed is False
     connection.close()
+
+
+def test_invalid_role_does_not_create_a_membership(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A)
+    platform.users_by_tenant[str(TENANT_A)] = [_person(OTHER_ID, "other@example.com")]
+    client = _client(tmp_path, monkeypatch, platform)
+    created = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects",
+        headers=_headers(write=True),
+        json={"code": "N-1", "name": "North"},
+    )
+    project_id = created.json()["id"]
+    invalid = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "tenant_admin"},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["message"] == "Project role must be project manager or project member."
+    listed = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=False),
+    )
+    assert [item["user_id"] for item in listed.json()["items"]] == [USER_ID]
 
 
 def test_manage_permission_sees_projects_without_membership_and_lead_read_does_not(tmp_path, monkeypatch) -> None:
