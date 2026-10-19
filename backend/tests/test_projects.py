@@ -4,15 +4,18 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from app.api.projects import project_management_allowed
+from app.api.projects import project_management_allowed, record_access_for_project
 from app.api.shell import get_platform_client
 from app.db import DuplicateProjectCode, apply_migrations, connect, create_project, database_path
 from app.main import create_app
-from app.platform_client import IdentityView, PlatformCallError, ProductAccessView
+from app.platform_client import IdentityView, PlatformCallError, ProductAccessView, TenantUserView
+from app.project_access import access_for, tenant_project_admin
 
 TENANT_A = UUID("11111111-1111-4111-8111-111111111111")
 TENANT_B = UUID("22222222-2222-4222-8222-222222222222")
 USER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+OTHER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+OUTSIDE_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 LEADS = "crm.lead_management.read"
 MANAGE = "crm.project_management.manage"
 
@@ -28,6 +31,8 @@ class FakePlatform:
             user_id=USER_ID,
             email="member@example.com",
         )
+        self.users_by_tenant: dict[str, list[TenantUserView] | PlatformCallError] = {}
+        self.user_lookups: list[tuple[str, str]] = []
 
     def product_access(self, tenant_id: str, cookie: str | None) -> ProductAccessView:
         self.access_calls.append(tenant_id)
@@ -48,6 +53,22 @@ class FakePlatform:
         if isinstance(self.identity_result, PlatformCallError):
             raise self.identity_result
         return self.identity_result
+
+    def list_tenant_users(self, tenant_id: str, cookie: str | None) -> list[TenantUserView]:
+        result = self.users_by_tenant.get(tenant_id, [])
+        if isinstance(result, PlatformCallError):
+            raise result
+        return result
+
+    def get_tenant_user(self, tenant_id: str, user_id: str, cookie: str | None) -> TenantUserView:
+        self.user_lookups.append((tenant_id, user_id))
+        result = self.users_by_tenant.get(tenant_id, [])
+        if isinstance(result, PlatformCallError):
+            raise result
+        for user in result:
+            if user.user_id == user_id:
+                return user
+        raise PlatformCallError(404)
 
 
 def _access(tenant_id: UUID, *, available: bool = True, name: str = "Aadi Technology") -> ProductAccessView:
@@ -359,3 +380,311 @@ def test_missing_name_and_bad_status_are_rejected(tmp_path, monkeypatch) -> None
         headers=_headers(write=False),
     )
     assert unknown.status_code == 404
+
+
+def _person(user_id: str, email: str, *, active: bool = True, status: str = "active") -> TenantUserView:
+    return TenantUserView(
+        user_id=user_id,
+        email=email,
+        identity_active=active,
+        membership_status=status,
+    )
+
+
+def _become(platform: FakePlatform, user_id: str, email: str) -> None:
+    platform.identity_result = IdentityView(user_id=user_id, email=email)
+
+
+def test_record_scope_contract_denies_non_members() -> None:
+    assert project_management_allowed([LEADS]) is True
+    assert tenant_project_admin([LEADS]) is False
+    assert tenant_project_admin([MANAGE]) is True
+    assert tenant_project_admin(["users.read", "roles.manage"]) is False
+    manager = access_for(role="project_manager", status="active", permission_keys=[LEADS])
+    member = access_for(role="project_member", status="active", permission_keys=[LEADS])
+    removed = access_for(role="project_manager", status="removed", permission_keys=[LEADS])
+    stranger = access_for(role=None, status=None, permission_keys=[LEADS])
+    admin = access_for(role=None, status=None, permission_keys=[MANAGE])
+    assert manager.allows("access_records") is True
+    assert manager.record_scope() == "project"
+    assert manager.allows("add_member") is True
+    assert member.record_scope() == "assigned"
+    assert member.allows("archive_project") is False
+    assert member.allows("add_member") is False
+    assert removed.allows("view_project") is False
+    assert removed.record_scope() is None
+    assert stranger.allows("view_project") is False
+    assert admin.allows("archive_project") is True
+    assert admin.record_scope() == "project"
+
+
+def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
+    from pathlib import Path
+
+    path = tmp_path / "legacy.sqlite"
+    connection = connect(path)
+    script = Path(__file__).resolve().parents[1] / "migrations" / "001_projects.sql"
+    connection.executescript(script.read_text(encoding="utf-8"))
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS crm_schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO crm_schema_migrations (version, applied_at)
+        VALUES ('001_projects.sql', '2026-10-19T00:00:00+00:00')
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO projects (
+            id, tenant_id, code, name, description, status, created_by, created_at, updated_at
+        )
+        VALUES ('p-legacy', ?, 'S2-REC', 'Recording gate', 'Kept', 'archived', ?, ?, ?)
+        """,
+        (str(TENANT_A), USER_ID, "2026-10-19T00:00:00+00:00", "2026-10-19T00:00:00+00:00"),
+    )
+    connection.commit()
+    connection.close()
+    apply_migrations(path)
+    apply_migrations(path)
+    connection = connect(path)
+    versions = [row["version"] for row in connection.execute("SELECT version FROM crm_schema_migrations ORDER BY version")]
+    assert versions == ["001_projects.sql", "002_project_memberships.sql"]
+    stored = connection.execute("SELECT name, status FROM projects").fetchone()
+    assert stored is not None
+    assert stored["name"] == "Recording gate"
+    assert stored["status"] == "archived"
+    assert connection.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"] == 1
+    memberships = list(connection.execute("SELECT user_id, role, status, scope_policy FROM project_memberships"))
+    assert len(memberships) == 1
+    assert memberships[0]["user_id"] == USER_ID
+    assert memberships[0]["role"] == "project_manager"
+    assert memberships[0]["status"] == "active"
+    assert memberships[0]["scope_policy"] == "project"
+    connection.close()
+
+
+def test_project_membership_roles_and_scope(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A)
+    _allow(platform, TENANT_B)
+    platform.users_by_tenant[str(TENANT_A)] = [
+        _person(USER_ID, "manager@example.com"),
+        _person(OTHER_ID, "other@example.com"),
+        _person(OUTSIDE_ID, "inactive@example.com", status="inactive"),
+    ]
+    client = _client(tmp_path, monkeypatch, platform)
+    created = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects",
+        headers=_headers(write=True),
+        json={"code": "N-1", "name": "Secret North"},
+    )
+    assert created.status_code == 201
+    assert created.json()["access"]["role"] == "project_manager"
+    assert created.json()["access"]["record_scope"] == "project"
+    project_id = created.json()["id"]
+    members = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=False),
+    )
+    assert members.status_code == 200
+    assert members.json()["items"][0]["user_id"] == USER_ID
+    assert members.json()["items"][0]["role"] == "project_manager"
+    assert members.json()["items"][0]["status"] == "active"
+    assert members.json()["items"][0]["email"] == "member@example.com"
+
+    _become(platform, OTHER_ID, "other@example.com")
+    hidden = client.get(f"/api/v1/tenants/{TENANT_A}/projects", headers=_headers(write=False))
+    assert hidden.status_code == 200
+    assert hidden.json()["items"] == []
+    denied = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert denied.status_code == 404
+    assert "Secret North" not in denied.text
+    for method, path in (
+        ("PATCH", f"/api/v1/tenants/{TENANT_A}/projects/{project_id}"),
+        ("POST", f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/archive"),
+        ("POST", f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members"),
+    ):
+        response = client.request(
+            method,
+            path,
+            headers=_headers(write=True),
+            json={"name": "Stolen", "user_id": OTHER_ID, "role": "project_manager"},
+        )
+        assert response.status_code == 404
+        assert "Secret North" not in response.text
+    foreign = client.post(
+        f"/api/v1/tenants/{TENANT_B}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert foreign.status_code == 404
+    assert "Secret North" not in foreign.text
+
+    _become(platform, USER_ID, "manager@example.com")
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    assert added.json()["role"] == "project_member"
+    assert added.json()["scope_policy"] == "assigned"
+    assert added.json()["email"] == "other@example.com"
+    membership_id = added.json()["id"]
+    duplicate = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_manager"},
+    )
+    assert duplicate.status_code == 409
+    outside = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": str(uuid4()), "role": "project_member"},
+    )
+    assert outside.status_code == 404
+    assert outside.json()["error"]["message"] == "That user is not a member of this organization."
+    inactive = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OUTSIDE_ID, "role": "project_member"},
+    )
+    assert inactive.status_code == 422
+    missing_csrf = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers={"cookie": "aadi_session=member"},
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert missing_csrf.status_code == 401
+    lookups_before_directory_block = len(platform.user_lookups)
+
+    _become(platform, OTHER_ID, "other@example.com")
+    viewed = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert viewed.status_code == 200
+    assert viewed.json()["access"]["role"] == "project_member"
+    assert viewed.json()["access"]["can_manage_members"] is False
+    assert viewed.json()["access"]["record_scope"] == "assigned"
+    blocked = client.patch(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=True),
+        json={"name": "Stolen"},
+    )
+    assert blocked.status_code == 403
+    assert client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/archive",
+        headers=_headers(write=True),
+    ).status_code == 403
+    assert client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": USER_ID, "role": "project_member"},
+    ).status_code == 403
+    untouched = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert untouched.json()["name"] == "Secret North"
+
+    _become(platform, USER_ID, "manager@example.com")
+    promoted = client.patch(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members/{membership_id}",
+        headers=_headers(write=True),
+        json={"role": "project_manager"},
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "project_manager"
+    assert promoted.json()["scope_policy"] == "project"
+    creator = members.json()["items"][0]["id"]
+    removed = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members/{creator}/remove",
+        headers=_headers(write=True),
+    )
+    assert removed.status_code == 200
+    assert removed.json()["status"] == "removed"
+    _become(platform, USER_ID, "manager@example.com")
+    lost = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert lost.status_code == 404
+    _become(platform, OTHER_ID, "other@example.com")
+    kept = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert kept.status_code == 200
+    last = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members/{membership_id}/remove",
+        headers=_headers(write=True),
+    )
+    assert last.status_code == 409
+    assert last.json()["error"]["message"] == "This project needs an active project manager."
+    assert client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    ).status_code == 200
+    history = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=False),
+    )
+    statuses = {(item["user_id"], item["status"]) for item in history.json()["items"]}
+    assert (USER_ID, "removed") in statuses
+    assert (OTHER_ID, "active") in statuses
+
+    platform.users_by_tenant[str(TENANT_A)] = PlatformCallError(403)
+    blocked_directory = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/eligible-users",
+        headers=_headers(write=False),
+    )
+    assert blocked_directory.status_code == 403
+    assert blocked_directory.json()["error"]["message"] == (
+        "You cannot look up organization members with this sign-in."
+    )
+    refused = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": USER_ID, "role": "project_member"},
+    )
+    assert refused.status_code == 403
+    assert len(platform.user_lookups) >= lookups_before_directory_block
+    connection = connect(database_path())
+    access = record_access_for_project(connection, str(TENANT_A), project_id, type("Caller", (), {"user_id": OTHER_ID, "email": "other@example.com", "keys": [LEADS]})())
+    assert access.record_scope() == "project"
+    connection.close()
+
+
+def test_manage_permission_sees_projects_without_membership_and_lead_read_does_not(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A, [LEADS])
+    client = _client(tmp_path, monkeypatch, platform)
+    created = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects",
+        headers=_headers(write=True),
+        json={"code": "N-1", "name": "Secret North"},
+    )
+    project_id = created.json()["id"]
+    _become(platform, OTHER_ID, "other@example.com")
+    assert client.get(f"/api/v1/tenants/{TENANT_A}/projects", headers=_headers(write=False)).json()["items"] == []
+    platform.permissions_by_tenant[str(TENANT_A)] = [MANAGE]
+    listed = client.get(f"/api/v1/tenants/{TENANT_A}/projects", headers=_headers(write=False))
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [project_id]
+    opened = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert opened.status_code == 200
+    assert opened.json()["access"]["can_manage_project"] is True
+    assert opened.json()["name"] == "Secret North"

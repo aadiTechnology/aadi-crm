@@ -30,6 +30,16 @@ class IdentityView:
     email: str
 
 
+@dataclass(frozen=True)
+class TenantUserView:
+    """Safe directory fields. Password and session data are never read."""
+
+    user_id: str
+    email: str
+    identity_active: bool
+    membership_status: str
+
+
 class PlatformClient:
     """Forwards the caller cookie. A tenant id in a CRM body is never sent."""
 
@@ -82,6 +92,25 @@ class PlatformClient:
             raise PlatformCallError(502) from None
         return IdentityView(user_id=user_id, email=email)
 
+    def list_tenant_users(self, tenant_id: str, cookie: str | None) -> list[TenantUserView]:
+        """Forward `GET /tenants/{id}/users`. The Control Plane requires `users.read`."""
+
+        payload = self._get(f"/api/v1/tenants/{tenant_id}/users", cookie)
+        if not isinstance(payload, list):
+            raise PlatformCallError(502)
+        return [_tenant_user(item) for item in payload]
+
+    def get_tenant_user(self, tenant_id: str, user_id: str, cookie: str | None) -> TenantUserView:
+        """Forward `GET /tenants/{id}/users/{user_id}`. Another tenant's user is 404."""
+
+        payload = self._get(f"/api/v1/tenants/{tenant_id}/users/{user_id}", cookie)
+        if not isinstance(payload, dict):
+            raise PlatformCallError(502)
+        user = _tenant_user(payload)
+        if user.user_id != user_id:
+            raise PlatformCallError(502)
+        return user
+
     def _get(self, path: str, cookie: str | None) -> dict | list:
         headers = {}
         if cookie:
@@ -103,3 +132,30 @@ class PlatformClient:
         if not isinstance(body, (dict, list)):
             raise PlatformCallError(502)
         return body
+
+
+def _tenant_user(payload: object) -> TenantUserView:
+    if not isinstance(payload, dict):
+        raise PlatformCallError(502)
+    user_id = payload.get("id")
+    email = payload.get("email")
+    identity_active = payload.get("identity_active")
+    membership_status = payload.get("membership_status")
+    if (
+        not isinstance(user_id, str)
+        or not isinstance(email, str)
+        or not email.strip()
+        or not isinstance(identity_active, bool)
+        or membership_status not in {"active", "inactive"}
+    ):
+        raise PlatformCallError(502)
+    try:
+        UUID(user_id)
+    except ValueError:
+        raise PlatformCallError(502) from None
+    return TenantUserView(
+        user_id=user_id,
+        email=email,
+        identity_active=identity_active,
+        membership_status=membership_status,
+    )

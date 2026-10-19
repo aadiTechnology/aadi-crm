@@ -48,6 +48,17 @@ export type LeadsStub = {
   items: unknown[]
 }
 
+export type ProjectRole = 'project_manager' | 'project_member'
+
+export type ProjectAccess = {
+  role: ProjectRole | null
+  scope_policy: 'project' | 'assigned' | null
+  can_manage_project: boolean
+  can_manage_members: boolean
+  can_access_records: boolean
+  record_scope: 'project' | 'assigned' | null
+}
+
 export type Project = {
   id: string
   tenant_id: string
@@ -58,6 +69,27 @@ export type Project = {
   created_by: string | null
   created_at: string
   updated_at: string
+  access: ProjectAccess
+}
+
+export type ProjectMembership = {
+  id: string
+  tenant_id: string
+  project_id: string
+  user_id: string
+  email: string | null
+  role: ProjectRole
+  scope_policy: 'project' | 'assigned'
+  status: 'active' | 'removed'
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type EligibleProjectUser = {
+  id: string
+  email: string
 }
 
 export type ProjectInput = {
@@ -237,6 +269,56 @@ export function updateProject(
 
 export function archiveProject(tenantId: string, projectId: string): Promise<Project> {
   return request<Project>(crmUrl(), `${projectPath(tenantId, projectId)}/archive`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function listProjectMembers(
+  tenantId: string,
+  projectId: string,
+): Promise<{ items: ProjectMembership[]; directory_available: boolean }> {
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/members`)
+}
+
+export function listEligibleProjectUsers(
+  tenantId: string,
+  projectId: string,
+): Promise<{ items: EligibleProjectUser[] }> {
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/eligible-users`)
+}
+
+export function addProjectMember(
+  tenantId: string,
+  projectId: string,
+  input: { user_id: string; role: ProjectRole },
+): Promise<ProjectMembership> {
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/members`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateProjectMemberRole(
+  tenantId: string,
+  projectId: string,
+  membershipId: string,
+  role: ProjectRole,
+): Promise<ProjectMembership> {
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/members/${membershipId}`, {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ role }),
+  })
+}
+
+export function removeProjectMember(
+  tenantId: string,
+  projectId: string,
+  membershipId: string,
+): Promise<ProjectMembership> {
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/members/${membershipId}/remove`, {
     method: 'POST',
     headers: mutationHeaders(),
   })

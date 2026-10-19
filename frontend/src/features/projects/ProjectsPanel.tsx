@@ -2,13 +2,21 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import {
+  addProjectMember,
   ApiError,
   archiveProject,
   createProject,
   getProject,
+  listEligibleProjectUsers,
+  listProjectMembers,
   listProjects,
+  removeProjectMember,
   updateProject,
+  updateProjectMemberRole,
+  type EligibleProjectUser,
   type Project,
+  type ProjectMembership,
+  type ProjectRole,
 } from '@/services/platform'
 
 type ListState =
@@ -19,6 +27,17 @@ type ListState =
 type DetailState =
   | { status: 'loading' }
   | { status: 'ready'; project: Project }
+  | { status: 'error'; message: string }
+
+type MembersState =
+  | { status: 'loading' }
+  | { status: 'ready'; items: ProjectMembership[]; directoryAvailable: boolean }
+  | { status: 'error'; message: string }
+
+type EligibleState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; items: EligibleProjectUser[] }
   | { status: 'error'; message: string }
 
 function messageFrom(error: unknown): string {
@@ -36,6 +55,18 @@ function formatWhen(value: string): string {
   return parsed.toLocaleString()
 }
 
+function roleLabel(role: ProjectRole): string {
+  return role === 'project_manager' ? 'Project manager' : 'Project member'
+}
+
+function scopeLabel(scope: 'project' | 'assigned'): string {
+  return scope === 'project' ? 'All project records' : 'Assigned records'
+}
+
+function memberLabel(member: ProjectMembership): string {
+  return member.email?.trim() || member.user_id
+}
+
 export function ProjectsPanel({ tenantId }: { tenantId: string }) {
   const { projectId } = useParams()
   const location = useLocation()
@@ -47,12 +78,18 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
   const [statusFilter, setStatusFilter] = useState('')
   const [list, setList] = useState<ListState>({ status: 'loading' })
   const [detail, setDetail] = useState<DetailState>({ status: 'loading' })
+  const [members, setMembers] = useState<MembersState>({ status: 'loading' })
+  const [eligible, setEligible] = useState<EligibleState>({ status: 'idle' })
   const [code, setCode] = useState('')
   const [createName, setCreateName] = useState('')
   const [createDescription, setCreateDescription] = useState('')
   const [editName, setEditName] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [memberUserId, setMemberUserId] = useState('')
+  const [memberRole, setMemberRole] = useState<ProjectRole>('project_member')
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, ProjectRole>>({})
   const [formError, setFormError] = useState<string | null>(null)
+  const [memberError, setMemberError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -87,18 +124,49 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
     }
     let cancelled = false
     setDetail({ status: 'loading' })
+    setMembers({ status: 'loading' })
+    setEligible({ status: 'idle' })
+    setMemberError(null)
     getProject(tenantId, projectId)
-      .then((project) => {
-        if (!cancelled) {
-          setDetail({ status: 'ready', project })
-          setEditName(project.name)
-          setEditDescription(project.description)
-          setFormError(null)
+      .then(async (project) => {
+        if (cancelled) {
+          return
+        }
+        setDetail({ status: 'ready', project })
+        setEditName(project.name)
+        setEditDescription(project.description)
+        setFormError(null)
+        const listed = await listProjectMembers(tenantId, projectId)
+        if (cancelled) {
+          return
+        }
+        setMembers({
+          status: 'ready',
+          items: listed.items,
+          directoryAvailable: listed.directory_available,
+        })
+        setRoleDrafts(
+          Object.fromEntries(listed.items.map((member) => [member.id, member.role])),
+        )
+        if (!project.access.can_manage_members) {
+          return
+        }
+        setEligible({ status: 'loading' })
+        try {
+          const directory = await listEligibleProjectUsers(tenantId, projectId)
+          if (!cancelled) {
+            setEligible({ status: 'ready', items: directory.items })
+          }
+        } catch (error: unknown) {
+          if (!cancelled) {
+            setEligible({ status: 'error', message: messageFrom(error) })
+          }
         }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           setDetail({ status: 'error', message: messageFrom(error) })
+          setMembers({ status: 'error', message: messageFrom(error) })
         }
       })
     return () => {
@@ -179,6 +247,87 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
     }
   }
 
+  async function refreshMembers(project: Project) {
+    if (!projectId) {
+      return
+    }
+    const listed = await listProjectMembers(tenantId, projectId)
+    setMembers({
+      status: 'ready',
+      items: listed.items,
+      directoryAvailable: listed.directory_available,
+    })
+    setRoleDrafts(Object.fromEntries(listed.items.map((member) => [member.id, member.role])))
+    if (!project.access.can_manage_members) {
+      setEligible({ status: 'idle' })
+      return
+    }
+    const directory = await listEligibleProjectUsers(tenantId, projectId)
+    setEligible({ status: 'ready', items: directory.items })
+  }
+
+  async function onAddMember(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!projectId || detail.status !== 'ready') {
+      return
+    }
+    if (!memberUserId) {
+      setMemberError('Choose an organization member.')
+      return
+    }
+    setSubmitting(true)
+    setMemberError(null)
+    try {
+      await addProjectMember(tenantId, projectId, { user_id: memberUserId, role: memberRole })
+      const project = await getProject(tenantId, projectId)
+      setDetail({ status: 'ready', project })
+      await refreshMembers(project)
+      setMemberUserId('')
+      setMemberRole('project_member')
+      setSubmitting(false)
+    } catch (error) {
+      setMemberError(messageFrom(error))
+      setSubmitting(false)
+    }
+  }
+
+  async function onSaveRole(member: ProjectMembership) {
+    if (!projectId || detail.status !== 'ready') {
+      return
+    }
+    const role = roleDrafts[member.id] ?? member.role
+    setSubmitting(true)
+    setMemberError(null)
+    try {
+      await updateProjectMemberRole(tenantId, projectId, member.id, role)
+      const project = await getProject(tenantId, projectId)
+      setDetail({ status: 'ready', project })
+      await refreshMembers(project)
+      setSubmitting(false)
+    } catch (error) {
+      setMemberError(messageFrom(error))
+      setSubmitting(false)
+    }
+  }
+
+  async function onRemove(member: ProjectMembership) {
+    if (!projectId || detail.status !== 'ready') {
+      return
+    }
+    setSubmitting(true)
+    setMemberError(null)
+    try {
+      await removeProjectMember(tenantId, projectId, member.id)
+      const project = await getProject(tenantId, projectId)
+      setDetail({ status: 'ready', project })
+      await refreshMembers(project)
+      setSubmitting(false)
+    } catch (error) {
+      setMemberError(messageFrom(error))
+      setSubmitting(false)
+    }
+  }
+
   if (onNew) {
     return (
       <section className="stack" aria-labelledby="project-create-heading">
@@ -217,6 +366,8 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
   }
 
   if (onDetail) {
+    const canManageProject = detail.status === 'ready' && detail.project.access.can_manage_project
+    const canManageMembers = detail.status === 'ready' && detail.project.access.can_manage_members
     return (
       <section className="stack" aria-labelledby="project-detail-heading">
         <Link to={`/tenants/${tenantId}/projects`}>Back to projects</Link>
@@ -235,40 +386,166 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
             <p>
               Status <strong>{detail.project.status === 'archived' ? 'Archived' : 'Active'}</strong>
             </p>
+            <p>
+              Your role{' '}
+              <strong>
+                {detail.project.access.role
+                  ? roleLabel(detail.project.access.role)
+                  : canManageProject
+                    ? 'Project administrator'
+                    : 'No project role'}
+              </strong>
+            </p>
+            {detail.project.access.record_scope ? (
+              <p>
+                Record scope <strong>{scopeLabel(detail.project.access.record_scope)}</strong>
+              </p>
+            ) : null}
             <p>{detail.project.description || 'No description.'}</p>
             <p className="muted">Created {formatWhen(detail.project.created_at)}</p>
             <p className="muted">Updated {formatWhen(detail.project.updated_at)}</p>
             {detail.project.created_by ? <p className="muted">Creator {detail.project.created_by}</p> : null}
-            <form className="stack" onSubmit={(event) => void onEdit(event)} noValidate>
-              <h3>Edit project</h3>
-              <label>
-                Project name
-                <input name="name" value={editName} onChange={(event) => setEditName(event.target.value)} />
-              </label>
-              <label>
-                Description
-                <textarea
-                  name="description"
-                  value={editDescription}
-                  onChange={(event) => setEditDescription(event.target.value)}
-                />
-              </label>
-              {formError ? (
-                <p role="alert" className="alert alert-error">
-                  {formError}
-                </p>
-              ) : null}
-              <button type="submit" disabled={submitting}>
-                {submitting ? 'Saving project' : 'Save project'}
-              </button>
-            </form>
-            {detail.project.status === 'active' ? (
+            {canManageProject ? (
+              <form className="stack" onSubmit={(event) => void onEdit(event)} noValidate>
+                <h3>Edit project</h3>
+                <label>
+                  Project name
+                  <input name="name" value={editName} onChange={(event) => setEditName(event.target.value)} />
+                </label>
+                <label>
+                  Description
+                  <textarea
+                    name="description"
+                    value={editDescription}
+                    onChange={(event) => setEditDescription(event.target.value)}
+                  />
+                </label>
+                {formError ? (
+                  <p role="alert" className="alert alert-error">
+                    {formError}
+                  </p>
+                ) : null}
+                <button type="submit" disabled={submitting}>
+                  {submitting ? 'Saving project' : 'Save project'}
+                </button>
+              </form>
+            ) : null}
+            {canManageProject && detail.project.status === 'active' ? (
               <button type="button" onClick={() => void onArchive()} disabled={submitting}>
                 Archive project
               </button>
-            ) : (
-              <p role="status">This project is archived.</p>
-            )}
+            ) : null}
+            {detail.project.status === 'archived' ? <p role="status">This project is archived.</p> : null}
+            <section className="stack" aria-labelledby="project-members-heading">
+              <h3 id="project-members-heading">Members</h3>
+              {members.status === 'loading' ? <p role="status">Loading members</p> : null}
+              {members.status === 'error' ? (
+                <p role="alert" className="alert alert-error">
+                  {members.message}
+                </p>
+              ) : null}
+              {members.status === 'ready' && members.items.length === 0 ? <p>No members are on this project.</p> : null}
+              {members.status === 'ready' && members.items.length > 0 ? (
+                <ul className="member-list">
+                  {members.items.map((member) => {
+                    const label = memberLabel(member)
+                    return (
+                      <li key={member.id}>
+                        <p>
+                          <strong>{label}</strong>
+                        </p>
+                        <p>
+                          Role <strong>{roleLabel(member.role)}</strong>
+                        </p>
+                        <p>
+                          Status <strong>{member.status === 'active' ? 'Active' : 'Removed'}</strong>
+                        </p>
+                        <p className="muted">Record scope {scopeLabel(member.scope_policy)}</p>
+                        {canManageMembers && member.status === 'active' ? (
+                          <div className="stack">
+                            <label>
+                              Project role for {label}
+                              <select
+                                aria-label={`Project role for ${label}`}
+                                value={roleDrafts[member.id] ?? member.role}
+                                onChange={(event) =>
+                                  setRoleDrafts((current) => ({
+                                    ...current,
+                                    [member.id]: event.target.value as ProjectRole,
+                                  }))
+                                }
+                              >
+                                <option value="project_manager">Project manager</option>
+                                <option value="project_member">Project member</option>
+                              </select>
+                            </label>
+                            <div className="row-actions">
+                              <button type="button" onClick={() => void onSaveRole(member)} disabled={submitting}>
+                                Save role for {label}
+                              </button>
+                              <button type="button" onClick={() => void onRemove(member)} disabled={submitting}>
+                                Remove {label}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </li>
+                    )
+                  })}
+                </ul>
+              ) : null}
+              {memberError ? (
+                <p role="alert" className="alert alert-error">
+                  {memberError}
+                </p>
+              ) : null}
+              {canManageMembers && eligible.status === 'error' ? (
+                <p role="alert" className="alert alert-error">
+                  {eligible.message}
+                </p>
+              ) : null}
+              {canManageMembers && eligible.status === 'loading' ? <p role="status">Loading organization members</p> : null}
+              {canManageMembers && eligible.status === 'ready' ? (
+                <form className="stack" onSubmit={(event) => void onAddMember(event)} noValidate>
+                  <h3>Add member</h3>
+                  {eligible.items.length === 0 ? (
+                    <p>No other active organization members are available to add.</p>
+                  ) : (
+                    <>
+                      <label>
+                        Organization member
+                        <select
+                          name="member"
+                          value={memberUserId}
+                          onChange={(event) => setMemberUserId(event.target.value)}
+                        >
+                          <option value="">Select a member</option>
+                          {eligible.items.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.email}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Project role
+                        <select
+                          name="role"
+                          value={memberRole}
+                          onChange={(event) => setMemberRole(event.target.value as ProjectRole)}
+                        >
+                          <option value="project_member">Project member</option>
+                          <option value="project_manager">Project manager</option>
+                        </select>
+                      </label>
+                      <button type="submit" disabled={submitting}>
+                        {submitting ? 'Adding member' : 'Add member'}
+                      </button>
+                    </>
+                  )}
+                </form>
+              ) : null}
+            </section>
           </>
         ) : null}
       </section>
@@ -279,7 +556,7 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
     list.status === 'ready' && list.items.length === 0
       ? appliedQuery || statusFilter
         ? 'No projects match this search.'
-        : 'No projects are in this organization.'
+        : 'No projects are available for this sign-in.'
       : null
 
   return (
