@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
 import {
   accessMessage,
   ApiError,
+  canManageProjects,
   getLeads,
   getPermissions,
   getProductAccess,
@@ -38,6 +40,7 @@ type Screen =
       access: ProductAccess
       branding: ShellBranding | null
       canOpenLeads: boolean
+      canOpenProjects: boolean
       leads: LeadsView
       signingOut: boolean
     }
@@ -55,11 +58,16 @@ function leadsAllowed(access: ProductAccess, permissions: string[]): boolean {
   return access.available && permissions.includes(LEADS_PERMISSION)
 }
 
+function projectsAllowed(access: ProductAccess, permissions: string[]): boolean {
+  return access.available && canManageProjects(permissions)
+}
+
 export function CrmShellPage() {
   const { tenantId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const onLeads = location.pathname.endsWith('/leads')
+  const onProjects = location.pathname.includes('/projects')
   const [sessionVersion, setSessionVersion] = useState(0)
   const [screen, setScreen] = useState<Screen>({ status: 'loading' })
   const [email, setEmail] = useState('')
@@ -114,6 +122,7 @@ export function CrmShellPage() {
         const permissions = await getPermissions(tenantId)
         const branding = await readBranding(tenantId)
         const canOpenLeads = leadsAllowed(access, permissions)
+        const canOpenProjects = projectsAllowed(access, permissions)
         let leads: LeadsView = { status: 'hidden' }
         if (onLeads) {
           try {
@@ -134,6 +143,7 @@ export function CrmShellPage() {
             access,
             branding,
             canOpenLeads,
+            canOpenProjects,
             leads,
             signingOut: false,
           })
@@ -309,6 +319,17 @@ export function CrmShellPage() {
           ) : (
             <p>Leads is not available for this sign-in.</p>
           )}
+          {screen.canOpenProjects ? (
+            <Link to={`/tenants/${screen.access.tenant_id}/projects`}>Projects</Link>
+          ) : (
+            <p>Projects is not available for this sign-in.</p>
+          )}
+          {onProjects && screen.canOpenProjects ? <ProjectsPanel tenantId={screen.access.tenant_id} /> : null}
+          {onProjects && !screen.canOpenProjects ? (
+            <p role="alert" className="alert alert-error">
+              You do not have permission to perform this action.
+            </p>
+          ) : null}
           {onLeads && screen.leads.status === 'ready' ? (
             <section aria-labelledby="leads-heading">
               <h2 id="leads-heading">Leads</h2>

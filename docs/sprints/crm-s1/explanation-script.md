@@ -1,32 +1,34 @@
 # CRM-S1 real integration explanation
 
-Recording: `docs/sprints/crm-s1/recording.webm` (14.64 seconds, 1280×720).
+Recording: `docs/sprints/crm-s1/recording.webm` (8.96 seconds, 1280×720).
 
-This narration follows that recording in order. The page is the CRM shell at `http://127.0.0.1:5174`. The CRM API is on `http://127.0.0.1:8001`. The API answering port 8000 is the local Control Plane (`aadi-control-plane`), not the earlier stand-in. The signed-in address is the existing local test identity `playwright-recording@example.com`. The password field stays masked. No session cookie or password is shown.
+This narration follows that recording in order. The page is the CRM shell at `http://localhost:5174`. The CRM API answering the page is `http://localhost:8001` (`Aadi CRM`). The API answering `http://localhost:8000` is the local Control Plane (`aadi-control-plane`). The Control Plane web is running at `http://localhost:5173` and is not part of this recording. The signed-in address is the existing local test identity `playwright-recording@example.com`. The password field stays masked. No session cookie or password is shown.
 
 ## Purpose
 
-The recording checks the CRM shell against the running Control Plane. Sign-in uses the platform session cookie. The organization list comes from that session. Opening an organization calls product access for the key `crm`. This run does not reach a Leads link, because that access call returns not found.
+The recording checks the CRM browser against the running Control Plane and CRM API. Sign-in uses the platform session cookie. The organization list comes from that session. Opening the organization calls product access for the key `crm`. The shell then offers Leads, and opening Leads calls the CRM API. That leads call returns 200.
 
 ## Sequence
 
 1. The shell opens signed out, titled CRM, with Email, Password, and Sign in.
-2. Sign in with both fields empty shows "Email is required." The platform login route is not called.
-3. `playwright-recording@example.com` with a wrong password shows "Sign-in failed." The Control Plane login route returns 401. Organizations do not appear.
-4. The same email with the existing local password opens Organizations. One organization is listed: Bootstrap recording 1792111368748. The signed-in address is shown. Sign out is available.
-5. Opening that organization shows "The requested resource was not found." The Control Plane product-access route for key `crm` returns 404. The page does not show a CRM availability message or a Leads link.
-6. Opening that organization's leads address directly shows the same not-found message. Product access fails before the page requests the CRM leads route.
-7. An unknown organization id shows the same not-found message. The real organization name is not shown on that screen.
-8. Sign out returns to the empty sign-in form.
+2. The email `playwright-recording@example.com` is entered. The password is entered in the masked field. The characters appear as dots.
+3. Sign-in opens Organizations. One organization is listed: Bootstrap recording 1792111368748. The signed-in address is shown. Sign out is available.
+4. Opening that organization shows the CRM shell. The heading is the organization name. The page says "CRM is available in this organization." A Leads link is shown. The Leads section is not open yet.
+5. The page briefly shows "Checking access" while the Leads address loads.
+6. Leads opens in the same shell. The page still says CRM is available, shows the Leads heading, and says "No leads are open in this shell." It does not say that permission was denied.
 
-## What the Control Plane returned
+## What the browser called
 
-Successful login set the host-only cookies `aadi_session` and `aadi_csrf`. `GET /api/v1/auth/me` then returned 200 for this identity. `GET /api/v1/tenants` returned the one organization named above. `GET /api/v1/tenants/{tenant_id}/products/crm/access` returned 404. Each of those responses carried `Access-Control-Allow-Origin: http://127.0.0.1:5174` and a correlation id. The browser console reported the expected 401 and 404 resource failures. It did not report a CORS failure.
+The page host is `localhost`, so the shell calls `localhost` for both APIs. Those calls are the processes already listening on ports 8000 and 8001.
 
-The shell does not ask for permissions after product access returns 404, so this recording does not show `crm.lead_management.read`. A separate authenticated call for this same identity and organization, made before the recording and then signed out, returned 200 with no `crm.` permission keys.
+Signed-out `GET http://localhost:8000/api/v1/auth/me` returned 401. The development page issued that read twice before login. `POST http://localhost:8000/api/v1/auth/login` then returned 200. `GET /api/v1/auth/me` returned 200 for `playwright-recording@example.com`. `GET /api/v1/tenants` returned one organization.
 
-The CRM API on port 8001, called with the same session, returned 404 `RESOURCE_NOT_FOUND` for both the shell and leads routes. The Control Plane log shows those calls forwarded as product-access requests. An unauthenticated CRM shell call returned 401 and was forwarded the same way.
+Opening the organization called `GET /api/v1/tenants/e02812a0-8717-4f5f-be19-57f263daef52/products/crm/access` and received 200. The body has `product_key` `crm`, `product_name` `CRM`, `tenant_name` Bootstrap recording 1792111368748, and `available` true. `GET /api/v1/tenants/{tenant_id}/permissions` returned 200 with one key, `crm.lead_management.read`. `GET /api/v1/tenants/{tenant_id}/configuration` returned 403. The shell stays on the organization screen after that branding read. Opening Leads repeats the access, permissions, and configuration reads. The development page issued the shell reads twice.
+
+Leads itself is one browser call: `GET http://localhost:8001/api/v1/shell/tenants/e02812a0-8717-4f5f-be19-57f263daef52/leads`. It returned 200 with `module` `leads` and an empty `items` list. That response is not 403.
+
+Each Control Plane response in the flow included `Access-Control-Allow-Origin: http://localhost:5174` and a correlation id. The CRM leads response allowed the same origin and did not include a correlation id. The browser console reported the signed-out 401 responses, the configuration 403 responses, and a 404 for `/favicon.ico`. It did not report a CORS failure. No cookie or password appeared in the console text or the recording.
 
 ## Result
 
-Authentication against the real Control Plane succeeded for this identity. CRM product access did not. The registry has no product whose key is exactly `crm`, so the shell cannot open, and the Leads permission check is not reached in the page.
+Authentication against the real Control Plane succeeded. The CRM shell opened for Bootstrap recording 1792111368748 because product access for `crm` was available and the permission list included `crm.lead_management.read`. Leads loaded from the CRM API without a 403.

@@ -6,7 +6,7 @@ Product shell for CRM-S1. This repository is the CRM product. Authentication, te
 
 The shell signs in with the Control Plane session cookie. It lists organizations from the caller's active memberships, then opens a tenant only after `GET /api/v1/tenants/{tenant_id}/products/crm/access`. The Leads link is shown when that response has `available: true` and `GET /api/v1/tenants/{tenant_id}/permissions` includes `crm.lead_management.read`. The CRM leads route enforces both checks again. A hidden link is not authorization.
 
-This sprint does not create projects, records, a CRM password store, or a subscription store.
+CRM-S1 does not create records, a CRM password store, or a subscription store. CRM-S2 stores projects in the CRM-owned SQLite file `backend/data/aadi_crm.sqlite`. `CRM_DATABASE_PATH` overrides that file. The store is not the Control Plane database.
 
 ## Local run
 
@@ -45,4 +45,6 @@ cd frontend
 npm test
 ```
 
-Backend tests use an in-process platform double. They do not migrate or write to a shared database.
+Backend shell tests use an in-process platform double and do not write a database. Project tests apply the CRM migration to a temporary SQLite file.
+
+Project routes require CRM product access for the path tenant. Product access alone is not enough. The caller must hold `crm.project_management.manage` or, while that key is absent from the current CRM registration, the registered key `crm.lead_management.read`. Platform-only keys do not open projects. Queries and changes always filter on the tenant resolved through that access check. Archive keeps the row.

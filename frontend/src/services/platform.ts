@@ -3,15 +3,20 @@ import { readFrontendConfig } from '@/lib/config'
 export const CSRF_COOKIE_NAME = 'aadi_csrf'
 export const CSRF_HEADER_NAME = 'X-CSRF-Token'
 export const LEADS_PERMISSION = 'crm.lead_management.read'
+export const PROJECT_MANAGE_PERMISSION = 'crm.project_management.manage'
 
 export class ApiError extends Error {
   readonly status: number
 
-  constructor(status: number) {
-    super(`Request failed with status ${status}`)
+  constructor(status: number, message?: string) {
+    super(message ?? `Request failed with status ${status}`)
     this.name = 'ApiError'
     this.status = status
   }
+}
+
+export function canManageProjects(permissions: string[]): boolean {
+  return permissions.includes(PROJECT_MANAGE_PERMISSION) || permissions.includes(LEADS_PERMISSION)
 }
 
 export type Identity = {
@@ -41,6 +46,24 @@ export type ShellBranding = {
 export type LeadsStub = {
   module: string
   items: unknown[]
+}
+
+export type Project = {
+  id: string
+  tenant_id: string
+  code: string
+  name: string
+  description: string
+  status: 'active' | 'archived'
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectInput = {
+  code: string
+  name: string
+  description: string
 }
 
 export function accessMessage(status: number): string {
@@ -84,7 +107,16 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
     credentials: 'include',
   })
   if (!response.ok) {
-    throw new ApiError(response.status)
+    let message = accessMessage(response.status)
+    try {
+      const body = (await response.json()) as { error?: { message?: string } }
+      if (typeof body.error?.message === 'string' && body.error.message.trim()) {
+        message = body.error.message
+      }
+    } catch {
+      // Keep the status message when the body is empty or not JSON.
+    }
+    throw new ApiError(response.status, message)
   }
   if (response.status === 204) {
     return undefined as T
@@ -150,4 +182,62 @@ export async function readBranding(tenantId: string): Promise<ShellBranding | nu
 
 export function getLeads(tenantId: string): Promise<LeadsStub> {
   return request<LeadsStub>(crmUrl(), `/api/v1/shell/tenants/${tenantId}/leads`)
+}
+
+function projectPath(tenantId: string, projectId?: string): string {
+  const base = `/api/v1/tenants/${tenantId}/projects`
+  return projectId ? `${base}/${projectId}` : base
+}
+
+function mutationHeaders(): Headers {
+  const headers = new Headers()
+  headers.set(CSRF_HEADER_NAME, readCsrfCookie() ?? '')
+  return headers
+}
+
+export function listProjects(
+  tenantId: string,
+  search: { q: string; status: string },
+): Promise<{ items: Project[] }> {
+  const params = new URLSearchParams()
+  if (search.q.trim()) {
+    params.set('q', search.q.trim())
+  }
+  if (search.status) {
+    params.set('status', search.status)
+  }
+  const query = params.toString()
+  const path = query ? `${projectPath(tenantId)}?${query}` : projectPath(tenantId)
+  return request<{ items: Project[] }>(crmUrl(), path)
+}
+
+export function createProject(tenantId: string, input: ProjectInput): Promise<Project> {
+  return request<Project>(crmUrl(), projectPath(tenantId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function getProject(tenantId: string, projectId: string): Promise<Project> {
+  return request<Project>(crmUrl(), projectPath(tenantId, projectId))
+}
+
+export function updateProject(
+  tenantId: string,
+  projectId: string,
+  input: { name: string; description: string },
+): Promise<Project> {
+  return request<Project>(crmUrl(), projectPath(tenantId, projectId), {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function archiveProject(tenantId: string, projectId: string): Promise<Project> {
+  return request<Project>(crmUrl(), `${projectPath(tenantId, projectId)}/archive`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
 }

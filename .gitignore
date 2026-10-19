@@ -7,3 +7,5 @@ __pycache__/
 .vite/
 *.tsbuildinfo
 *.egg-info/
+backend/data/
+*.sqlite

@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.projects import router as projects_router
 from app.api.shell import router as shell_router
 
 _ORIGINS = [
@@ -19,10 +20,11 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=_ORIGINS,
         allow_credentials=True,
-        allow_methods=["GET", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token"],
     )
     application.include_router(shell_router)
+    application.include_router(projects_router)
     return application
 
 

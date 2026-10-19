@@ -1,6 +1,7 @@
 """Server-side calls to the Control Plane. The CRM process does not issue sessions."""
 
 from dataclasses import dataclass
+from uuid import UUID
 
 import httpx
 
@@ -21,6 +22,12 @@ class ProductAccessView:
     tenant_name: str
     product_name: str
     available: bool
+
+
+@dataclass(frozen=True)
+class IdentityView:
+    user_id: str
+    email: str
 
 
 class PlatformClient:
@@ -60,6 +67,20 @@ class PlatformClient:
         if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
             raise PlatformCallError(502)
         return payload
+
+    def identity(self, cookie: str | None) -> IdentityView:
+        payload = self._get("/api/v1/auth/me", cookie)
+        if not isinstance(payload, dict):
+            raise PlatformCallError(502)
+        user_id = payload.get("id")
+        email = payload.get("email")
+        if not isinstance(user_id, str) or not isinstance(email, str) or not email.strip():
+            raise PlatformCallError(502)
+        try:
+            UUID(user_id)
+        except ValueError:
+            raise PlatformCallError(502) from None
+        return IdentityView(user_id=user_id, email=email)
 
     def _get(self, path: str, cookie: str | None) -> dict | list:
         headers = {}
