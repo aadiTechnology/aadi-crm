@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { FormsPanel } from '@/features/forms/FormsPanel'
@@ -18,12 +18,15 @@ import {
   logout,
   me,
   readBranding,
+  brandingCssProperties,
   type Identity,
   type LeadsStub,
   type ProductAccess,
   type ShellBranding,
   type TenantSummary,
 } from '@/services/platform'
+
+const FAVICON_ID = 'aadi-tenant-favicon'
 
 type LeadsView =
   | { status: 'hidden' }
@@ -99,6 +102,25 @@ export function CrmShellPage() {
   useEffect(() => {
     setNavOpen(false)
   }, [location.pathname])
+
+  const faviconUrl = screen.status === 'shell' ? screen.branding?.faviconUrl : null
+  useEffect(() => {
+    const existing = document.getElementById(FAVICON_ID)
+    if (!faviconUrl) {
+      existing?.remove()
+      return
+    }
+    const link = existing instanceof HTMLLinkElement ? existing : document.createElement('link')
+    link.id = FAVICON_ID
+    link.rel = 'icon'
+    link.href = faviconUrl
+    if (!existing) {
+      document.head.append(link)
+    }
+    return () => {
+      link.remove()
+    }
+  }, [faviconUrl])
 
   useEffect(() => {
     let cancelled = false
@@ -242,10 +264,11 @@ export function CrmShellPage() {
     setScreen({ status: 'login', formError: null, submitting: false })
   }
 
-  const headingStyle =
-    screen.status === 'shell' && screen.branding?.primary
-      ? { color: screen.branding.primary }
-      : undefined
+  const shellBranding = screen.status === 'shell' ? screen.branding : null
+  const brandProperties = brandingCssProperties(shellBranding)
+  const shellStyle =
+    Object.keys(brandProperties).length > 0 ? (brandProperties as CSSProperties) : undefined
+  const headingStyle = shellBranding?.primary ? { color: shellBranding.primary } : undefined
   const title =
     screen.status === 'shell' ? screen.branding?.displayName || screen.access.tenant_name : 'CRM'
   const pageName = screen.status === 'tenants' ? 'Organizations' : workspacePage(location.pathname)
@@ -307,15 +330,19 @@ export function CrmShellPage() {
   const tenantIdForNav = screen.status === 'shell' ? screen.access.tenant_id : ''
 
   return (
-    <div className={navOpen ? 'app nav-open' : collapsed ? 'app is-collapsed' : 'app'}>
+    <div className={navOpen ? 'app nav-open' : collapsed ? 'app is-collapsed' : 'app'} style={shellStyle}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
       <aside className="sidebar" id="workspace-nav">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            A
-          </span>
+          {shellBranding?.logoUrl ? (
+            <img className="brand-logo" src={shellBranding.logoUrl} alt={shellBranding.logoAlt ?? ''} />
+          ) : (
+            <span className="brand-mark" aria-hidden="true">
+              A
+            </span>
+          )}
           <span className="brand-text">Aadi CRM</span>
         </div>
         <nav aria-label="Workspace">

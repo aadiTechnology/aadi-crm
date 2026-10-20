@@ -133,6 +133,29 @@ function filtersActive(query: RecordQuery): boolean {
   return Boolean(query.q || query.formId || query.source || query.createdFrom || query.createdTo)
 }
 
+function summaryText(item: RecordListItem): string {
+  return item.summary.map((entry) => `${entry.label}: ${entry.value}`).join(' · ')
+}
+
+function lastOffset(total: number, limit: number): number {
+  if (total <= 0 || limit <= 0) {
+    return 0
+  }
+  return Math.floor((total - 1) / limit) * limit
+}
+
+function visiblePages(current: number, count: number): number[] {
+  if (count <= 0) {
+    return []
+  }
+  const safeCurrent = Math.min(Math.max(current, 1), count)
+  if (count <= 7) {
+    return Array.from({ length: count }, (_, index) => index + 1)
+  }
+  const start = Math.max(1, Math.min(safeCurrent - 2, count - 4))
+  return Array.from({ length: 5 }, (_, index) => start + index)
+}
+
 export function RecordsPanel({ tenantId }: { tenantId: string }) {
   const { projectId, recordId } = useParams()
   const location = useLocation()
@@ -216,10 +239,18 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
   const [project, setProject] = useState<Project | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [forms, setForms] = useState<FormDefinition[]>([])
-  const [page, setPage] = useState<{ status: 'loading' | 'ready' | 'error'; items: RecordListItem[]; total: number }>({
+  const [page, setPage] = useState<{
+    status: 'loading' | 'ready' | 'error'
+    items: RecordListItem[]
+    total: number
+    limit: number
+    offset: number
+  }>({
     status: 'loading',
     items: [],
     total: 0,
+    limit: DEFAULT_PAGE_SIZE,
+    offset: 0,
   })
   const [draft, setDraft] = useState({ q: '', formId: '', source: '', createdFrom: '', createdTo: '' })
   const [query, setQuery] = useState<RecordQuery>({
@@ -266,12 +297,18 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
     listRecords(tenantId, projectId, query)
       .then((loaded) => {
         if (!cancelled) {
-          setPage({ status: 'ready', items: loaded.items, total: loaded.total })
+          setPage({
+            status: 'ready',
+            items: loaded.items,
+            total: loaded.total,
+            limit: loaded.limit,
+            offset: loaded.offset,
+          })
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setPage({ status: 'error', items: [], total: 0 })
+          setPage({ status: 'error', items: [], total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 })
         }
       })
     return () => {
@@ -281,23 +318,55 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
 
   function onSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setQuery((current) => ({
-      ...current,
+    const next = {
       q: draft.q.trim(),
       formId: draft.formId,
       source: draft.source,
       createdFrom: draft.createdFrom,
       createdTo: draft.createdTo,
-      offset: 0,
-    }))
+    }
+    setQuery((current) => {
+      if (
+        (current.q ?? '') === next.q &&
+        (current.formId ?? '') === next.formId &&
+        (current.source ?? '') === next.source &&
+        (current.createdFrom ?? '') === next.createdFrom &&
+        (current.createdTo ?? '') === next.createdTo &&
+        (current.offset ?? 0) === 0
+      ) {
+        return current
+      }
+      return { ...current, ...next, offset: 0 }
+    })
+  }
+
+  function onClear() {
+    setDraft({ q: '', formId: '', source: '', createdFrom: '', createdTo: '' })
+    setQuery((current) => {
+      if (!filtersActive(current)) {
+        return current
+      }
+      return {
+        ...current,
+        q: undefined,
+        formId: undefined,
+        source: undefined,
+        createdFrom: undefined,
+        createdTo: undefined,
+        offset: 0,
+      }
+    })
   }
 
   const archived = project?.status === 'archived'
   const offset = query.offset ?? 0
   const limit = query.limit ?? DEFAULT_PAGE_SIZE
-  const from = page.total === 0 ? 0 : offset + 1
-  const to = offset + page.items.length
-  const showPager = page.status === 'ready' && (page.items.length > 0 || offset > 0)
+  const from = page.total === 0 ? 0 : page.offset + 1
+  const to = page.total === 0 ? 0 : page.offset + page.items.length
+  const showPager = page.status === 'ready' && (page.items.length > 0 || page.offset > 0)
+  const pageCount = page.total > 0 ? Math.ceil(page.total / limit) : 0
+  const currentPage = Math.floor(offset / limit) + 1
+  const endOffset = lastOffset(page.total, limit)
 
   return (
     <section className="stack" aria-labelledby="record-list-heading">
@@ -323,12 +392,12 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
         </p>
       ) : null}
       {archived ? <p>This project is archived. Existing records can still be read.</p> : null}
-      <form className="stack" onSubmit={onSearch}>
-        <label>
+      <form className="panel record-filters" onSubmit={onSearch}>
+        <label className="filter-search">
           Search records
           <input value={draft.q} onChange={(event) => setDraft((current) => ({ ...current, q: event.target.value }))} />
         </label>
-        <label>
+        <label className="filter-form">
           Form
           <select
             value={draft.formId}
@@ -342,7 +411,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             ))}
           </select>
         </label>
-        <label>
+        <label className="filter-source">
           Source
           <select
             value={draft.source}
@@ -356,7 +425,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             ))}
           </select>
         </label>
-        <label>
+        <label className="filter-from">
           Created from
           <input
             type="date"
@@ -364,7 +433,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             onChange={(event) => setDraft((current) => ({ ...current, createdFrom: event.target.value }))}
           />
         </label>
-        <label>
+        <label className="filter-to">
           Created to
           <input
             type="date"
@@ -372,18 +441,23 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             onChange={(event) => setDraft((current) => ({ ...current, createdTo: event.target.value }))}
           />
         </label>
-        <label>
+        <label className="filter-sort">
           Sort
           <select
             value={`${query.sort ?? 'created_at'}:${query.direction ?? 'desc'}`}
             onChange={(event) => {
               const [sort, direction] = event.target.value.split(':')
-              setQuery((current) => ({
-                ...current,
-                sort: sort as RecordQuery['sort'],
-                direction: direction as RecordQuery['direction'],
-                offset: 0,
-              }))
+              setQuery((current) => {
+                if (current.sort === sort && current.direction === direction && (current.offset ?? 0) === 0) {
+                  return current
+                }
+                return {
+                  ...current,
+                  sort: sort as RecordQuery['sort'],
+                  direction: direction as RecordQuery['direction'],
+                  offset: 0,
+                }
+              })
             }}
           >
             <option value="created_at:desc">Newest</option>
@@ -392,17 +466,18 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             <option value="public_number:asc">Record number</option>
           </select>
         </label>
-        <label>
+        <label className="filter-size">
           Page size
           <select
-            value={String(query.limit ?? DEFAULT_PAGE_SIZE)}
+            value={String(limit)}
             onChange={(event) => {
-              const limit = Number(event.target.value)
-              setQuery((current) => ({
-                ...current,
-                limit,
-                offset: 0,
-              }))
+              const nextLimit = Number(event.target.value)
+              setQuery((current) => {
+                if (current.limit === nextLimit && (current.offset ?? 0) === 0) {
+                  return current
+                }
+                return { ...current, limit: nextLimit, offset: 0 }
+              })
             }}
           >
             {PAGE_SIZES.map((size) => (
@@ -412,7 +487,12 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             ))}
           </select>
         </label>
-        <button type="submit">Search</button>
+        <div className="filter-actions">
+          <button type="submit">Search</button>
+          <button type="button" className="button-secondary" onClick={onClear}>
+            Clear
+          </button>
+        </div>
       </form>
       {page.status === 'loading' ? <LoadingSkeleton /> : null}
       {page.status === 'error' ? (
@@ -433,52 +513,157 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
           }
         />
       ) : null}
-      {page.status === 'ready' && page.items.length === 0 && offset > 0 ? (
+      {page.status === 'ready' && page.items.length === 0 && page.offset > 0 ? (
         <EmptyState title="No records on this page" message="Go back to see the records that match." />
       ) : null}
+      {page.status === 'ready' ? (
+        <div className="results-header">
+          <h3 id="record-results-heading">Records ({page.total})</h3>
+        </div>
+      ) : null}
       {page.status === 'ready' && page.items.length > 0 ? (
-        <>
-          <p>
-            Showing {from}–{to} of {page.total}
-          </p>
-          <ul className="project-list">
-            {page.items.map((item) => (
-              <li key={item.id}>
-                <Link to={`/tenants/${tenantId}/records/${projectId}/${item.id}`}>
-                  <span className="card-title">{item.public_number}</span>
-                  <span>{item.display_name}</span>
-                  <span className="muted">
-                    {item.form_name} · version {item.version_number}
-                  </span>
-                  <span className="muted">Created {formatWhen(item.created_at)}</span>
-                  <span className="muted">Updated {formatWhen(item.updated_at)}</span>
-                  {item.summary.map((entry) => (
-                    <span key={entry.label}>
-                      {entry.label}: {entry.value}
-                    </span>
-                  ))}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </>
+        <div className="table-wrap">
+          <table className="data-table" aria-labelledby="record-results-heading">
+            <thead>
+              <tr>
+                <th scope="col">Record ID</th>
+                <th scope="col">Name</th>
+                <th scope="col" className="col-extra">Form</th>
+                <th scope="col" className="col-extra">Source</th>
+                <th scope="col">Created</th>
+                <th scope="col" className="col-extra">Updated</th>
+                <th scope="col" className="col-extra">Details</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {page.items.map((item) => {
+                const details = summaryText(item)
+                const created = formatWhen(item.created_at)
+                const updated = formatWhen(item.updated_at)
+                return (
+                  <tr key={item.id}>
+                    <td>
+                      <Link to={`/tenants/${tenantId}/records/${projectId}/${item.id}`}>{item.public_number}</Link>
+                    </td>
+                    <td>
+                      <span className="clip" title={item.display_name}>
+                        {item.display_name}
+                      </span>
+                    </td>
+                    <td className="col-extra">
+                      <span className="clip" title={item.form_name}>
+                        {item.form_name}
+                      </span>
+                    </td>
+                    <td className="col-extra">{item.source_label}</td>
+                    <td>
+                      <span className="clip" title={item.created_at}>
+                        {created}
+                      </span>
+                    </td>
+                    <td className="col-extra">
+                      <span className="clip" title={item.updated_at}>
+                        {updated}
+                      </span>
+                    </td>
+                    <td className="col-extra">
+                      <span className="clip" title={details || undefined}>
+                        {details || '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <Link
+                        className="table-action"
+                        to={`/tenants/${tenantId}/records/${projectId}/${item.id}`}
+                        aria-label={`Open ${item.public_number}`}
+                      >
+                        Open
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : null}
       {showPager ? (
-        <div className="stack">
-          <button
-            type="button"
-            disabled={offset === 0}
-            onClick={() => setQuery((current) => ({ ...current, offset: Math.max(0, offset - limit) }))}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            disabled={offset + limit >= page.total}
-            onClick={() => setQuery((current) => ({ ...current, offset: offset + limit }))}
-          >
-            Next
-          </button>
+        <div className="pager">
+          <p>
+            Showing {from}–{to} of {page.total} records
+          </p>
+          <div className="pager-controls">
+            <label>
+              Rows per page
+              <select
+                value={String(limit)}
+                onChange={(event) => {
+                  const nextLimit = Number(event.target.value)
+                  setQuery((current) => {
+                    if (current.limit === nextLimit && (current.offset ?? 0) === 0) {
+                      return current
+                    }
+                    return { ...current, limit: nextLimit, offset: 0 }
+                  })
+                }}
+              >
+                {PAGE_SIZES.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={offset === 0}
+              onClick={() => setQuery((current) => ((current.offset ?? 0) === 0 ? current : { ...current, offset: 0 }))}
+            >
+              First
+            </button>
+            <button
+              type="button"
+              disabled={offset === 0}
+              onClick={() =>
+                setQuery((current) => ({ ...current, offset: Math.max(0, offset - limit) }))
+              }
+            >
+              Previous
+            </button>
+            {visiblePages(currentPage, pageCount).map((pageNumber) => (
+              <button
+                key={pageNumber}
+                type="button"
+                aria-label={`Page ${pageNumber}`}
+                aria-current={pageNumber === currentPage ? 'page' : undefined}
+                onClick={() => {
+                  const nextOffset = (pageNumber - 1) * limit
+                  setQuery((current) =>
+                    (current.offset ?? 0) === nextOffset ? current : { ...current, offset: nextOffset },
+                  )
+                }}
+              >
+                {pageNumber}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={offset + limit >= page.total}
+              onClick={() => setQuery((current) => ({ ...current, offset: offset + limit }))}
+            >
+              Next
+            </button>
+            <button
+              type="button"
+              disabled={offset >= endOffset}
+              onClick={() =>
+                setQuery((current) => ((current.offset ?? 0) === endOffset ? current : { ...current, offset: endOffset }))
+              }
+            >
+              Last
+            </button>
+          </div>
         </div>
       ) : null}
     </section>

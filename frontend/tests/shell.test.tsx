@@ -137,6 +137,7 @@ it('hides leads when the product is unavailable', async () => {
   expect(screen.queryByRole('link', { name: 'Leads' })).not.toBeInTheDocument()
   expect(screen.queryByText(OTHER)).not.toBeInTheDocument()
   expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Aadi Technology')
+  expect(document.querySelector('.app')).not.toHaveAttribute('style')
 })
 
 it('hides leads when the permission is missing and the stub denies a direct visit', async () => {
@@ -189,7 +190,88 @@ it('shows leads only after both checks and an empty stub', async () => {
   renderAt(`/tenants/${TENANT}`)
   expect(await screen.findByRole('link', { name: 'Leads' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Aadi Studio')
+  expect(shellStyle().getPropertyValue('--color-primary')).toBe('#0f766e')
 })
+
+it('lets branding colors win over brand tokens and keeps an unreadable pair off the shell', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({
+        profile: { display_name: 'North Studio' },
+        branding: { primary: '#112233', secondary: '#445566' },
+        logo: { url: 'https://cdn.example/logo.png', alt_text: 'North mark' },
+        favicon: { url: 'https://cdn.example/favicon.png' },
+        brand_tokens: {
+          primary_color: '#ABCDEF',
+          background_color: '#FFFFFF',
+          text_color: '#111827',
+        },
+      })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}`)
+  expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('North Studio')
+  expect(screen.getByRole('img', { name: 'North mark' })).toHaveAttribute('src', 'https://cdn.example/logo.png')
+  await waitFor(() =>
+    expect(document.getElementById('aadi-tenant-favicon')).toHaveAttribute('href', 'https://cdn.example/favicon.png'),
+  )
+  const style = shellStyle()
+  expect(style.getPropertyValue('--color-primary')).toBe('#112233')
+  expect(style.getPropertyValue('--color-secondary')).toBe('#445566')
+  expect(style.getPropertyValue('--color-bg')).toBe('#FFFFFF')
+  expect(style.getPropertyValue('--color-text')).toBe('#111827')
+  expect(style.getPropertyValue('--color-primary')).not.toBe('#ABCDEF')
+})
+
+it('uses a brand token primary and ignores text that fails on its background', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({
+        brand_tokens: {
+          primary_color: '#ABCDEF',
+          background_color: '#FFFFFF',
+          text_color: '#EEEEEE',
+        },
+      })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}`)
+  expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Aadi Technology')
+  const style = shellStyle()
+  expect(style.getPropertyValue('--color-primary')).toBe('#ABCDEF')
+  expect(style.getPropertyValue('--color-bg')).toBe('')
+  expect(style.getPropertyValue('--color-text')).toBe('')
+})
+
+function shellStyle(): CSSStyleDeclaration {
+  const app = document.querySelector('.app')
+  if (!(app instanceof HTMLElement)) {
+    throw new Error('missing shell')
+  }
+  return app.style
+}
 
 it('does not render another tenant returned for this url', async () => {
   asFetch().mockImplementation((input: RequestInfo | URL) => {

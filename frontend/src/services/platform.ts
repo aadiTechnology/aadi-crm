@@ -43,6 +43,15 @@ export type ProductAccess = {
 export type ShellBranding = {
   displayName: string | null
   primary: string | null
+  secondary: string | null
+  background: string | null
+  surface: string | null
+  text: string | null
+  muted: string | null
+  border: string | null
+  logoUrl: string | null
+  logoAlt: string | null
+  faviconUrl: string | null
 }
 
 export type LeadsStub = {
@@ -198,17 +207,156 @@ export function getPermissions(tenantId: string): Promise<string[]> {
   return request<string[]>(platformUrl(), `/api/v1/tenants/${tenantId}/permissions`)
 }
 
+const BRAND_HEX = /^#[0-9A-Fa-f]{6}$/
+const PLATFORM_TEXT = '#3D4458'
+const PLATFORM_BACKGROUND = '#F7F8FB'
+
+type ConfigurationDocument = {
+  profile?: { display_name?: unknown }
+  branding?: { primary?: unknown; secondary?: unknown }
+  logo?: { url?: unknown; alt_text?: unknown }
+  favicon?: { url?: unknown }
+  brand_tokens?: {
+    primary_color?: unknown
+    secondary_color?: unknown
+    background_color?: unknown
+    surface_color?: unknown
+    text_color?: unknown
+    muted_text_color?: unknown
+    border_color?: unknown
+  }
+}
+
+function brandColor(value: unknown): string | null {
+  return typeof value === 'string' && BRAND_HEX.test(value) ? value : null
+}
+
+function httpUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > 2048 || /\s/.test(trimmed)) {
+    return null
+  }
+  try {
+    const url = new URL(trimmed)
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname) {
+      return trimmed
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((channel) => {
+    const value = Number.parseInt(channel, 16) / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0)
+}
+
+function contrastRatio(first: string, second: string): number {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second))
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+function readablePair(background: string, text: string): boolean {
+  return contrastRatio(background, text) >= 4.5
+}
+
+export function readableOnColor(background: string): string {
+  const light = '#FFFFFF'
+  const dark = '#1A1A1A'
+  return contrastRatio(background, light) >= contrastRatio(background, dark) ? light : dark
+}
+
+function mixColor(hex: string, toward: string, weight: number): string {
+  const channel = (source: string, index: number) => Number.parseInt(source.slice(1 + index * 2, 3 + index * 2), 16)
+  const parts = [0, 1, 2].map((index) => {
+    const value = Math.round(channel(hex, index) * weight + channel(toward, index) * (1 - weight))
+    return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
+  })
+  return `#${parts.join('')}`
+}
+
+/**
+ * Maps one tenant configuration document onto the CRM shell.
+ * Color precedence matches the Control Plane: branding.primary wins over
+ * brand_tokens.primary_color, and branding.secondary wins over secondary_color.
+ * Surface colors come only from brand_tokens, and text is applied only when
+ * it stays readable on the paired background.
+ */
+export function brandingFromConfiguration(document: unknown): ShellBranding {
+  const source = document && typeof document === 'object' ? (document as ConfigurationDocument) : {}
+  const tokens = source.brand_tokens
+  const primary = brandColor(source.branding?.primary) ?? brandColor(tokens?.primary_color)
+  const secondary = brandColor(source.branding?.secondary) ?? brandColor(tokens?.secondary_color)
+  const background = brandColor(tokens?.background_color)
+  const text = brandColor(tokens?.text_color)
+  const surface = brandColor(tokens?.surface_color)
+  const muted = brandColor(tokens?.muted_text_color)
+  const border = brandColor(tokens?.border_color)
+  const textApplied = Boolean(background && text && readablePair(background, text))
+  const textOnSurface = textApplied && text ? text : PLATFORM_TEXT
+  const pageBackground = textApplied && background ? background : PLATFORM_BACKGROUND
+  const displayName = source.profile?.display_name
+  const alt = source.logo?.alt_text
+  return {
+    displayName: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : null,
+    primary,
+    secondary,
+    background: textApplied ? background : null,
+    surface: surface && readablePair(surface, textOnSurface) ? surface : null,
+    text: textApplied ? text : null,
+    muted: muted && readablePair(pageBackground, muted) ? muted : null,
+    border,
+    logoUrl: httpUrl(source.logo?.url),
+    logoAlt: typeof alt === 'string' ? alt.trim() : null,
+    faviconUrl: httpUrl(source.favicon?.url),
+  }
+}
+
+export function brandingCssProperties(branding: ShellBranding | null): Record<string, string> {
+  if (!branding) {
+    return {}
+  }
+  const style: Record<string, string> = {}
+  if (branding.primary) {
+    style['--color-primary'] = branding.primary
+    style['--color-primary-hover'] = mixColor(branding.primary, '#000000', 0.88)
+    style['--color-primary-soft'] = mixColor(branding.primary, '#ffffff', 0.12)
+    style['--color-on-primary'] = readableOnColor(branding.primary)
+    style['--color-nav-border'] = mixColor(branding.primary, '#ffffff', 0.28)
+  }
+  if (branding.secondary) {
+    style['--color-secondary'] = branding.secondary
+  }
+  if (branding.background) {
+    style['--color-bg'] = branding.background
+  }
+  if (branding.surface) {
+    style['--color-surface'] = branding.surface
+  }
+  if (branding.text) {
+    style['--color-text'] = branding.text
+  }
+  if (branding.muted) {
+    style['--color-muted'] = branding.muted
+  }
+  if (branding.border) {
+    style['--color-border'] = branding.border
+  }
+  return style
+}
+
 export async function readBranding(tenantId: string): Promise<ShellBranding | null> {
   try {
-    const document = await request<{
-      profile?: { display_name?: string }
-      branding?: { primary?: string }
-    }>(platformUrl(), `/api/v1/tenants/${tenantId}/configuration`)
-    const primary = document.branding?.primary
-    return {
-      displayName: document.profile?.display_name ?? null,
-      primary: typeof primary === 'string' && /^#[0-9A-Fa-f]{6}$/.test(primary) ? primary : null,
-    }
+    const document = await request<unknown>(platformUrl(), `/api/v1/tenants/${tenantId}/configuration`)
+    return brandingFromConfiguration(document)
   } catch (error) {
     if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
       return null

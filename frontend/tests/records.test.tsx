@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -229,7 +229,7 @@ it('sends search to the server and can retry a failed list', async () => {
   await user.click(screen.getByRole('button', { name: 'Retry' }))
   await user.type(await screen.findByLabelText('Search records'), 'North')
   await user.click(screen.getByRole('button', { name: 'Search' }))
-  expect(await screen.findByRole('link', { name: /N-1-0001/ })).toBeInTheDocument()
+  expect(await screen.findByRole('link', { name: (value) => value === 'N-1-0001' })).toBeInTheDocument()
 })
 
 it('returns from an empty later page and sends the selected page size', async () => {
@@ -262,13 +262,116 @@ it('returns from an empty later page and sends the selected page size', async ()
   await user.click(await screen.findByRole('button', { name: 'Next' }))
   expect(await screen.findByText('No records on this page')).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Previous' }))
-  expect(await screen.findByRole('link', { name: /N-1-0001/ })).toBeInTheDocument()
+  expect(await screen.findByRole('link', { name: (value) => value === 'N-1-0001' })).toBeInTheDocument()
   await user.selectOptions(screen.getByLabelText('Page size'), '5')
   expect(await screen.findByText('No records yet')).toBeInTheDocument()
   expect(offsets).toContain('25:25')
   expect(offsets).toContain('0:25')
   expect(offsets).toContain('0:5')
 })
+
+it('renders a server-paged table and clears only the search filters', async () => {
+  const user = userEvent.setup()
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname.endsWith(`/projects/${PROJECT_ID}`)) {
+      return json(project())
+    }
+    if (url.pathname.endsWith('/forms')) {
+      return json({ items: [formDefinition()] })
+    }
+    if (url.pathname.endsWith('/records')) {
+      const offset = Number(url.searchParams.get('offset') ?? '0')
+      const limit = Number(url.searchParams.get('limit') ?? '25')
+      if (url.searchParams.get('q') === 'North') {
+        return json({ ...pageWith(record()), total: 1, limit, offset })
+      }
+      if (offset > 0) {
+        return json({
+          items: [
+            {
+              ...pageWith(record('Later school')).items[0],
+              id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
+              public_number: 'N-1-0002',
+              display_name: 'Later school',
+            },
+          ],
+          total: 8,
+          limit,
+          offset,
+        })
+      }
+      return json({ ...pageWith(record()), total: 8, limit, offset })
+    }
+    return json({ error: { message: 'Unexpected request' } }, 500)
+  })
+
+  renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}`)
+  expect(await screen.findByRole('columnheader', { name: 'Record ID' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Form' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Source' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Created' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Updated' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Details' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument()
+  expect(screen.queryByRole('columnheader', { name: 'Priority' })).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Records (8)' })).toBeInTheDocument()
+  expect(screen.getByText('Showing 1–1 of 8 records')).toBeInTheDocument()
+  expect(screen.getByText('School name: North school')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument()
+  expect(screen.getAllByRole('button', { name: 'Clear' })).toHaveLength(1)
+  expect(screen.queryByRole('button', { name: /×|remove/i })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'First' })).toBeDisabled()
+
+  await user.selectOptions(screen.getByLabelText('Sort'), 'public_number:asc')
+  await waitFor(() => {
+    expect(lastRecordUrl().searchParams.get('sort')).toBe('public_number')
+    expect(lastRecordUrl().searchParams.get('direction')).toBe('asc')
+  })
+  await user.selectOptions(screen.getByLabelText('Page size'), '5')
+  await waitFor(() => expect(lastRecordUrl().searchParams.get('limit')).toBe('5'))
+  await user.click(screen.getByRole('button', { name: 'Last' }))
+  expect(await screen.findByRole('link', { name: (value) => value === 'N-1-0002' })).toBeInTheDocument()
+  expect(screen.getByText('Showing 6–6 of 8 records')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Page 2' })).toHaveAttribute('aria-current', 'page')
+  expect(lastRecordUrl().searchParams.get('offset')).toBe('5')
+  expect(lastRecordUrl().searchParams.get('sort')).toBe('public_number')
+
+  await user.type(screen.getByLabelText('Search records'), 'North')
+  await user.selectOptions(screen.getByLabelText('Form'), FORM_ID)
+  await user.click(screen.getByRole('button', { name: 'Search' }))
+  expect(await screen.findByRole('heading', { name: 'Records (1)' })).toBeInTheDocument()
+  await waitFor(() => {
+    expect(lastRecordUrl().searchParams.get('q')).toBe('North')
+    expect(lastRecordUrl().searchParams.get('form_id')).toBe(FORM_ID)
+    expect(lastRecordUrl().searchParams.get('offset')).toBe('0')
+    expect(lastRecordUrl().searchParams.get('sort')).toBe('public_number')
+  })
+
+  await user.click(screen.getByRole('button', { name: 'Clear' }))
+  expect(await screen.findByRole('heading', { name: 'Records (8)' })).toBeInTheDocument()
+  expect(screen.getByLabelText('Search records')).toHaveValue('')
+  expect(screen.getByLabelText('Form')).toHaveValue('')
+  await waitFor(() => {
+    expect(lastRecordUrl().searchParams.get('q')).toBeNull()
+    expect(lastRecordUrl().searchParams.get('form_id')).toBeNull()
+    expect(lastRecordUrl().searchParams.get('offset')).toBe('0')
+    expect(lastRecordUrl().searchParams.get('sort')).toBe('public_number')
+    expect(lastRecordUrl().searchParams.get('limit')).toBe('5')
+  })
+})
+
+function lastRecordUrl(): URL {
+  const calls = asFetch().mock.calls
+    .map((call) => new URL(String(call[0]), 'http://localhost'))
+    .filter((url) => url.pathname.endsWith('/records') && !url.pathname.includes('/records/'))
+  const latest = calls.at(-1)
+  if (!latest) {
+    throw new Error('missing records request')
+  }
+  return latest
+}
 
 function pageWith(item: CrmRecord): RecordPage {
   return {
