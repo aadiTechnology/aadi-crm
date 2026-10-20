@@ -2,7 +2,7 @@
 
 Date: 20 October 2026. Repository: `aadi-crm` only. No commit, push, merge, tag, deploy, or Control Plane source or database change was made for this sprint.
 
-This is original Sprint 4: form versioning, preview, and the internal renderer. Evidence is stored under `crm-s6` so the earlier sprint folders stay untouched. The sprint is not closed. It is waiting for review.
+This is original Sprint 4: form versioning, preview, and the internal renderer. Evidence is stored under `crm-s6` so `docs/sprints/crm-s4/` stays the membership and record-decision sprint. The sprint is not closed. Owner acceptance is still pending. The later validation pass is `docs/sprints/crm-s6/technical-validation.md`.
 
 ## Source of the requirements
 

@@ -548,6 +548,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [versions, setVersions] = useState<VersionState>({ status: 'loading' })
   const [versionError, setVersionError] = useState<string | null>(null)
+  const [publishReview, setPublishReview] = useState(false)
   const [preview, setPreview] = useState<PreviewState>({ status: 'loading' })
   const [published, setPublished] = useState<PublishedState>({ status: 'loading' })
   const [notice, setNotice] = useState<string | null>(null)
@@ -653,6 +654,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     let cancelled = false
     setDetail({ status: 'loading' })
     setVersions({ status: 'loading' })
+    setPublishReview(false)
     Promise.all([
       getProject(tenantId, projectId),
       getForm(tenantId, projectId, formId),
@@ -854,6 +856,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     try {
       await publishForm(tenantId, projectId, formId)
       await reloadDetail()
+      setPublishReview(false)
       setNotice('Version published.')
       setSubmitting(false)
     } catch (error) {
@@ -1131,8 +1134,8 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
               <Link className="button-link" to={`/tenants/${tenantId}/forms/${projectId}/${formId}/preview`}>
                 Preview draft
               </Link>
-              <button type="button" disabled={submitting} onClick={() => void onPublish()}>
-                {submitting ? 'Publishing' : 'Publish version'}
+              <button type="button" disabled={submitting} onClick={() => setPublishReview(true)}>
+                Publish version
               </button>
               {detail.form.current_published_version_id ? (
                 <button type="button" className="button-secondary" disabled={submitting} onClick={() => void onReplaceDraft()}>
@@ -1140,6 +1143,33 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
                 </button>
               ) : null}
             </div>
+          ) : null}
+          {publishReview && canManage ? (
+            <section className="panel stack" aria-labelledby="publish-review-heading">
+              <h3 id="publish-review-heading">Review publication</h3>
+              <p>
+                Publishing creates an immutable version of this draft. The version number, fields, and validation stay
+                as they are now. Later draft edits do not change a version that is already published.
+              </p>
+              <p>
+                {detail.form.fields.length === 0
+                  ? 'This draft has no fields.'
+                  : `${detail.form.fields.length} field${detail.form.fields.length === 1 ? '' : 's'} will be copied into the new version.`}
+              </p>
+              <div className="row-actions">
+                <button type="button" disabled={submitting} onClick={() => void onPublish()}>
+                  {submitting ? 'Publishing' : 'Confirm publish'}
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={submitting}
+                  onClick={() => setPublishReview(false)}
+                >
+                  Cancel publish
+                </button>
+              </div>
+            </section>
           ) : null}
           {versionError ? (
             <p role="alert" className="alert alert-error">

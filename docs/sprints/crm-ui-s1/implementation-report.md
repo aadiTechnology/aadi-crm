@@ -2,7 +2,7 @@
 
 Date: 20 October 2026. Repository: `aadi-crm` only. Branch: `main`. No commit, push, merge, tag, deploy, Control Plane change, database migration, or backend contract change.
 
-The sprint is not closed. It is waiting for review.
+Technical acceptance is recorded in `docs/sprints/crm-ui-s1/technical-acceptance.md`. The owner had already approved the screen design in `recording.webm`. CRM-UI-S1 is closed. A later form-versioning pass added a publish review on the form builder; that change is Sprint 4 scope and is not part of this UI closure.
 
 ## Summary
 
@@ -88,7 +88,7 @@ Frontend routes, API functions, CSRF headers, and permission gates were not chan
 
 ## Known limitations
 
-- The sprint is not closed.
+- CRM-UI-S1 is closed in `technical-acceptance.md`. `npx tsc --noEmit` is still not clean.
 - Overview is sparse because the product has no dashboard data.
 - The availability line is repeated on later pages.
 - Archive does not ask for a second confirmation.
