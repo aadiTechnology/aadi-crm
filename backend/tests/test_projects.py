@@ -509,8 +509,12 @@ def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
         "003_form_definitions.sql",
         "004_form_versions.sql",
         "005_records.sql",
+        "006_followups.sql",
+        "007_reminders.sql",
     ]
+    assert connection.execute("SELECT COUNT(*) AS count FROM reminder_deliveries").fetchone()["count"] == 0
     assert connection.execute("SELECT COUNT(*) AS count FROM records").fetchone()["count"] == 0
+    assert connection.execute("SELECT COUNT(*) AS count FROM follow_ups").fetchone()["count"] == 0
     assert connection.execute("SELECT COUNT(*) AS count FROM form_definitions").fetchone()["count"] == 0
     stored = connection.execute("SELECT name, status FROM projects").fetchone()
     assert stored is not None

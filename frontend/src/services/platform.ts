@@ -862,3 +862,254 @@ export function archiveRecord(
     body: JSON.stringify({ expected_updated_at: expectedUpdatedAt }),
   })
 }
+
+export type FollowUpStatus = 'open' | 'completed' | 'cancelled'
+export type FollowUpQueueName = 'overdue' | 'today' | 'upcoming'
+
+export type FollowUpInput = {
+  task_type: string
+  owner_user_id: string
+  due_date: string
+  due_time: string
+  summary: string
+  call_status: string | null
+}
+
+export type FollowUp = FollowUpInput & {
+  id: string
+  project_id: string
+  record_id: string
+  task_type_label: string
+  due_at: string
+  timezone: string
+  status: FollowUpStatus
+  status_label: string
+  call_status_label: string | null
+  outcome: string
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  cancelled_at: string | null
+  public_number?: string
+  display_name?: string
+}
+
+export type ActivityItem = {
+  id: string
+  record_id: string
+  follow_up_id: string | null
+  actor_id: string
+  event_type: string
+  label: string
+  summary: string
+  occurred_at: string
+}
+
+export type FollowUpPage = {
+  items: FollowUp[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type ActivityPage = {
+  items: ActivityItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type FollowUpQueuePage = FollowUpPage & {
+  queue: FollowUpQueueName
+  timezone: string
+  window_start: string
+  window_end: string
+  owner_user_id: string | null
+}
+
+function followUpPath(tenantId: string, projectId: string, recordId: string, followUpId?: string): string {
+  const base = `${recordPath(tenantId, projectId, recordId)}/follow-ups`
+  return followUpId ? `${base}/${followUpId}` : base
+}
+
+export function listActivities(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  query: { limit?: number; offset?: number } = {},
+): Promise<ActivityPage> {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.offset !== undefined) {
+    params.set('offset', String(query.offset))
+  }
+  const search = params.toString()
+  return request(crmUrl(), `${recordPath(tenantId, projectId, recordId)}/activities${search ? `?${search}` : ''}`)
+}
+
+export function listFollowUps(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  query: { taskType?: string; limit?: number; offset?: number } = {},
+): Promise<FollowUpPage> {
+  const params = new URLSearchParams()
+  if (query.taskType) {
+    params.set('task_type', query.taskType)
+  }
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.offset !== undefined) {
+    params.set('offset', String(query.offset))
+  }
+  const search = params.toString()
+  return request(crmUrl(), `${followUpPath(tenantId, projectId, recordId)}${search ? `?${search}` : ''}`)
+}
+
+export function createFollowUp(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  input: FollowUpInput,
+): Promise<FollowUp> {
+  return request(crmUrl(), followUpPath(tenantId, projectId, recordId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateFollowUp(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  followUpId: string,
+  input: FollowUpInput & { expected_updated_at: string },
+): Promise<FollowUp> {
+  return request(crmUrl(), followUpPath(tenantId, projectId, recordId, followUpId), {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function completeFollowUp(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  followUpId: string,
+  input: { expected_updated_at: string; outcome: string },
+): Promise<FollowUp> {
+  return request(crmUrl(), `${followUpPath(tenantId, projectId, recordId, followUpId)}/complete`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function cancelFollowUp(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  followUpId: string,
+  input: { expected_updated_at: string; outcome: string },
+): Promise<FollowUp> {
+  return request(crmUrl(), `${followUpPath(tenantId, projectId, recordId, followUpId)}/cancel`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function listFollowUpQueue(
+  tenantId: string,
+  projectId: string,
+  query: { queue: FollowUpQueueName; ownerUserId?: string; taskType?: string; limit?: number; offset?: number },
+): Promise<FollowUpQueuePage> {
+  const params = new URLSearchParams()
+  params.set('queue', query.queue)
+  if (query.ownerUserId) {
+    params.set('owner_user_id', query.ownerUserId)
+  }
+  if (query.taskType) {
+    params.set('task_type', query.taskType)
+  }
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.offset !== undefined) {
+    params.set('offset', String(query.offset))
+  }
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/follow-ups?${params.toString()}`)
+}
+
+export type ReminderItem = {
+  id: string
+  kind: string
+  kind_label: string
+  channel: 'in_app' | 'email'
+  state: string
+  state_label: string
+  due_date: string
+  due_time: string
+  timezone: string
+  read: boolean
+  attempt_count: number
+  last_attempt_at: string | null
+  next_retry_at: string | null
+  last_error: string | null
+  failure_label: string | null
+  record_available: boolean
+  project_id?: string
+  record_id?: string
+  follow_up_id?: string
+  public_number?: string
+  recipient_user_id?: string
+  recipient_email?: string
+}
+
+export type ReminderDeliveryResult = {
+  claimed: number
+  in_app_sent: number
+  email_recorded: number
+  email_sent: number
+  retryable: number
+  failed: number
+  suppressed: number
+  email_mode: 'test' | 'live'
+  email_provider_confirmed: boolean
+}
+
+export function listReminders(tenantId: string): Promise<{ items: ReminderItem[]; total: number; timezone: string }> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/reminders`)
+}
+
+export function listReminderFailures(tenantId: string): Promise<{ items: ReminderItem[]; total: number }> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/reminders/failures`)
+}
+
+export function deliverReminders(tenantId: string): Promise<ReminderDeliveryResult> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/reminders/process`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function markReminderRead(tenantId: string, reminderId: string): Promise<ReminderItem> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/reminders/${reminderId}/read`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function retryReminder(tenantId: string, reminderId: string): Promise<ReminderItem> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/reminders/${reminderId}/retry`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { FormRenderer, type FormValue } from '@/features/forms/FormRenderer'
+import { RecordFollowUps } from '@/features/records/FollowUpsPanel'
 import { EmptyState, LoadingSkeleton } from '@/ui/chrome'
 import {
   ApiError,
@@ -779,6 +780,12 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
               ))}
             </div>
           ) : null}
+          <RecordFollowUps
+            tenantId={tenantId}
+            projectId={projectId}
+            recordId={record.id}
+            readOnly={Boolean(archived)}
+          />
           {archived ? null : (
             <button type="button" onClick={() => void onArchive()} disabled={submitting}>
               {submitting ? 'Archiving record' : 'Archive record'}
