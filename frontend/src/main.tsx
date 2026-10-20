@@ -12,6 +12,10 @@ const router = createBrowserRouter([
   { path: '/tenants/:tenantId/projects', element: <CrmShellPage /> },
   { path: '/tenants/:tenantId/projects/new', element: <CrmShellPage /> },
   { path: '/tenants/:tenantId/projects/:projectId', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms/:projectId', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms/:projectId/new', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms/:projectId/:formId', element: <CrmShellPage /> },
 ])
 
 const root = document.getElementById('root')

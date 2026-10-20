@@ -55,6 +55,7 @@ export type ProjectAccess = {
   scope_policy: 'project' | 'assigned' | null
   can_manage_project: boolean
   can_manage_members: boolean
+  can_manage_forms: boolean
   can_access_records: boolean
   record_scope: 'project' | 'assigned' | null
 }
@@ -319,6 +320,171 @@ export function removeProjectMember(
   membershipId: string,
 ): Promise<ProjectMembership> {
   return request(crmUrl(), `${projectPath(tenantId, projectId)}/members/${membershipId}/remove`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export type FormFieldType =
+  | 'text'
+  | 'long_text'
+  | 'number'
+  | 'mobile'
+  | 'email'
+  | 'url'
+  | 'date'
+  | 'time'
+  | 'dropdown'
+  | 'multi_select'
+  | 'radio'
+  | 'checkbox'
+  | 'currency'
+  | 'file'
+  | 'auto_number'
+
+export type FormOption = {
+  value: string
+  label: string
+}
+
+export type FormField = {
+  id: string
+  field_key: string
+  label: string
+  field_type: FormFieldType
+  required: boolean
+  help_text: string
+  section_name: string
+  position: number
+  default_value?: string | number | boolean | null
+  max_length?: number
+  min_value?: number
+  max_value?: number
+  options?: FormOption[]
+  currency_code?: string
+  max_size_mb?: number
+  extensions?: string[]
+  prefix?: string
+  pad_width?: number
+}
+
+export type FormDefinition = {
+  id: string
+  tenant_id: string
+  project_id: string
+  name: string
+  description: string
+  status: 'draft'
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+  fields: FormField[]
+}
+
+export type FormFieldInput = {
+  field_key?: string
+  label: string
+  field_type: FormFieldType
+  required: boolean
+  help_text?: string
+  section_name?: string
+  default_value?: string | number | boolean | null
+  max_length?: number
+  min_value?: number
+  max_value?: number
+  options?: FormOption[]
+  currency_code?: string
+  max_size_mb?: number
+  extensions?: string[]
+  prefix?: string
+  pad_width?: number
+}
+
+function formCollectionPath(tenantId: string, projectId: string): string {
+  return `${projectPath(tenantId, projectId)}/forms`
+}
+
+export function listForms(tenantId: string, projectId: string): Promise<{ items: FormDefinition[] }> {
+  return request(crmUrl(), formCollectionPath(tenantId, projectId))
+}
+
+export function createForm(
+  tenantId: string,
+  projectId: string,
+  input: { name: string; description: string },
+): Promise<FormDefinition> {
+  return request(crmUrl(), formCollectionPath(tenantId, projectId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function getForm(tenantId: string, projectId: string, formId: string): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}`)
+}
+
+export function updateForm(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  input: { name: string; description: string },
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}`, {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function addFormField(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  input: FormFieldInput,
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/fields`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateFormField(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  fieldId: string,
+  input: FormFieldInput,
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/fields/${fieldId}`, {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function reorderFormFields(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  fieldIds: string[],
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/fields/reorder`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ field_ids: fieldIds }),
+  })
+}
+
+export function removeFormField(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  fieldId: string,
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/fields/${fieldId}/remove`, {
     method: 'POST',
     headers: mutationHeaders(),
   })

@@ -28,6 +28,11 @@ ACTIONS = {
     "update_project": frozenset({PROJECT_MANAGER}),
     "archive_project": frozenset({PROJECT_MANAGER}),
     "access_records": frozenset({PROJECT_MANAGER, PROJECT_MEMBER}),
+    # Form definitions are CRM data. Lead read does not administer them.
+    # A project manager administers forms in that project. A project member
+    # may read them. crm.project_management.manage remains the only tenant-wide key.
+    "view_forms": frozenset({PROJECT_MANAGER, PROJECT_MEMBER}),
+    "manage_forms": frozenset({PROJECT_MANAGER}),
 }
 
 
@@ -62,6 +67,7 @@ class ProjectAccess:
             "can_manage_members": self.allows("add_member")
             and self.allows("remove_member")
             and self.allows("assign_role"),
+            "can_manage_forms": self.allows("manage_forms"),
             "can_access_records": self.allows("access_records"),
             "record_scope": self.record_scope(),
         }

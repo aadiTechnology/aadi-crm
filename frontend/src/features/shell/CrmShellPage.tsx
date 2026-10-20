@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import { FormsPanel } from '@/features/forms/FormsPanel'
 import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
 import {
   accessMessage,
@@ -67,7 +68,8 @@ export function CrmShellPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const onLeads = location.pathname.endsWith('/leads')
-  const onProjects = location.pathname.includes('/projects')
+  const onForms = location.pathname.includes('/forms')
+  const onProjects = location.pathname.includes('/projects') && !onForms
   const [sessionVersion, setSessionVersion] = useState(0)
   const [screen, setScreen] = useState<Screen>({ status: 'loading' })
   const [email, setEmail] = useState('')
@@ -324,8 +326,19 @@ export function CrmShellPage() {
           ) : (
             <p>Projects is not available for this sign-in.</p>
           )}
+          {screen.canOpenProjects ? (
+            <Link to={`/tenants/${screen.access.tenant_id}/forms`}>Forms</Link>
+          ) : (
+            <p>Forms is not available for this sign-in.</p>
+          )}
           {onProjects && screen.canOpenProjects ? <ProjectsPanel tenantId={screen.access.tenant_id} /> : null}
+          {onForms && screen.canOpenProjects ? <FormsPanel tenantId={screen.access.tenant_id} /> : null}
           {onProjects && !screen.canOpenProjects ? (
+            <p role="alert" className="alert alert-error">
+              You do not have permission to perform this action.
+            </p>
+          ) : null}
+          {onForms && !screen.canOpenProjects ? (
             <p role="alert" className="alert alert-error">
               You do not have permission to perform this action.
             </p>

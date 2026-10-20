@@ -503,7 +503,12 @@ def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
     apply_migrations(path)
     connection = connect(path)
     versions = [row["version"] for row in connection.execute("SELECT version FROM crm_schema_migrations ORDER BY version")]
-    assert versions == ["001_projects.sql", "002_project_memberships.sql"]
+    assert versions == [
+        "001_projects.sql",
+        "002_project_memberships.sql",
+        "003_form_definitions.sql",
+    ]
+    assert connection.execute("SELECT COUNT(*) AS count FROM form_definitions").fetchone()["count"] == 0
     stored = connection.execute("SELECT name, status FROM projects").fetchone()
     assert stored is not None
     assert stored["name"] == "Recording gate"
