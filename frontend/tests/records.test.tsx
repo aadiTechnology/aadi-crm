@@ -232,6 +232,44 @@ it('sends search to the server and can retry a failed list', async () => {
   expect(await screen.findByRole('link', { name: /N-1-0001/ })).toBeInTheDocument()
 })
 
+it('returns from an empty later page and sends the selected page size', async () => {
+  const user = userEvent.setup()
+  const offsets: string[] = []
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname.endsWith(`/projects/${PROJECT_ID}`)) {
+      return json(project())
+    }
+    if (url.pathname.endsWith('/forms')) {
+      return json({ items: [] })
+    }
+    if (url.pathname.endsWith('/records')) {
+      const offset = url.searchParams.get('offset') ?? '0'
+      const limit = url.searchParams.get('limit')
+      offsets.push(`${offset}:${limit}`)
+      if (limit === '5') {
+        return json({ items: [], total: 0, limit: 5, offset: 0 })
+      }
+      if (offset === '0') {
+        return json({ ...pageWith(record()), total: 30 })
+      }
+      return json({ items: [], total: 1, limit: 25, offset: 25 })
+    }
+    return json({ error: { message: 'Unexpected request' } }, 500)
+  })
+
+  renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}`)
+  await user.click(await screen.findByRole('button', { name: 'Next' }))
+  expect(await screen.findByText('No records on this page')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Previous' }))
+  expect(await screen.findByRole('link', { name: /N-1-0001/ })).toBeInTheDocument()
+  await user.selectOptions(screen.getByLabelText('Page size'), '5')
+  expect(await screen.findByText('No records yet')).toBeInTheDocument()
+  expect(offsets).toContain('25:25')
+  expect(offsets).toContain('0:25')
+  expect(offsets).toContain('0:5')
+})
+
 function pageWith(item: CrmRecord): RecordPage {
   return {
     items: [

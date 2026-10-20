@@ -24,7 +24,8 @@ import {
   type RenderField,
 } from '@/services/platform'
 
-const PAGE_SIZE = 25
+const PAGE_SIZES = [5, 25, 50] as const
+const DEFAULT_PAGE_SIZE = 25
 const SOURCES: { value: string; label: string }[] = [
   { value: 'manual', label: 'Manual' },
   { value: 'website', label: 'Website' },
@@ -224,7 +225,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
   const [query, setQuery] = useState<RecordQuery>({
     sort: 'created_at',
     direction: 'desc',
-    limit: PAGE_SIZE,
+    limit: DEFAULT_PAGE_SIZE,
     offset: 0,
   })
   const [reload, setReload] = useState(0)
@@ -293,8 +294,10 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
 
   const archived = project?.status === 'archived'
   const offset = query.offset ?? 0
+  const limit = query.limit ?? DEFAULT_PAGE_SIZE
   const from = page.total === 0 ? 0 : offset + 1
   const to = offset + page.items.length
+  const showPager = page.status === 'ready' && (page.items.length > 0 || offset > 0)
 
   return (
     <section className="stack" aria-labelledby="record-list-heading">
@@ -389,6 +392,26 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
             <option value="public_number:asc">Record number</option>
           </select>
         </label>
+        <label>
+          Page size
+          <select
+            value={String(query.limit ?? DEFAULT_PAGE_SIZE)}
+            onChange={(event) => {
+              const limit = Number(event.target.value)
+              setQuery((current) => ({
+                ...current,
+                limit,
+                offset: 0,
+              }))
+            }}
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="submit">Search</button>
       </form>
       {page.status === 'loading' ? <LoadingSkeleton /> : null}
@@ -400,7 +423,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
           </button>
         </p>
       ) : null}
-      {page.status === 'ready' && page.items.length === 0 ? (
+      {page.status === 'ready' && page.items.length === 0 && offset === 0 ? (
         <EmptyState
           title={filtersActive(query) ? 'No matching records' : 'No records yet'}
           message={
@@ -409,6 +432,9 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
               : 'Create a record from a published form.'
           }
         />
+      ) : null}
+      {page.status === 'ready' && page.items.length === 0 && offset > 0 ? (
+        <EmptyState title="No records on this page" message="Go back to see the records that match." />
       ) : null}
       {page.status === 'ready' && page.items.length > 0 ? (
         <>
@@ -435,23 +461,25 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
               </li>
             ))}
           </ul>
-          <div className="stack">
-            <button
-              type="button"
-              disabled={offset === 0}
-              onClick={() => setQuery((current) => ({ ...current, offset: Math.max(0, offset - PAGE_SIZE) }))}
-            >
-              Previous
-            </button>
-            <button
-              type="button"
-              disabled={offset + PAGE_SIZE >= page.total}
-              onClick={() => setQuery((current) => ({ ...current, offset: offset + PAGE_SIZE }))}
-            >
-              Next
-            </button>
-          </div>
         </>
+      ) : null}
+      {showPager ? (
+        <div className="stack">
+          <button
+            type="button"
+            disabled={offset === 0}
+            onClick={() => setQuery((current) => ({ ...current, offset: Math.max(0, offset - limit) }))}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            disabled={offset + limit >= page.total}
+            onClick={() => setQuery((current) => ({ ...current, offset: offset + limit }))}
+          >
+            Next
+          </button>
+        </div>
       ) : null}
     </section>
   )

@@ -5,6 +5,7 @@ published form. A client cannot supply those identifiers to widen access.
 """
 
 import re
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -34,6 +35,16 @@ _UUID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _calendar_date(value: str) -> bool:
+    if not _DATE.fullmatch(value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
 
 
 def _validation(message: str, fields: dict[str, str] | None = None) -> JSONResponse:
@@ -100,9 +111,9 @@ def read_records(
         return _validation("Form filter is not valid.")
     if source and source not in SOURCES:
         return _validation("Source filter is not valid.")
-    if created_from and not _DATE.fullmatch(created_from):
+    if created_from and not _calendar_date(created_from):
         return _validation("Created-from must use YYYY-MM-DD.")
-    if created_to and not _DATE.fullmatch(created_to):
+    if created_to and not _calendar_date(created_to):
         return _validation("Created-to must use YYYY-MM-DD.")
     if created_from and created_to and created_from > created_to:
         return _validation("Created-from cannot be after created-to.")

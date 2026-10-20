@@ -489,6 +489,270 @@ def test_development_copy_gains_records_without_changing_the_original(tmp_path) 
     assert records >= 0
 
 
+def test_list_filters_sort_and_pages_stay_inside_the_project(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A)
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id, form_id, _version = _ready(client)
+    first = _create(client, project_id, form_id, {"school_name": "Alpha", "priority": "hot"}, source="manual")
+    second = _create(client, project_id, form_id, {"school_name": "Beta", "priority": "warm"}, source="website")
+    third = _create(client, project_id, form_id, {"school_name": "Gamma", "priority": "cold"}, source="manual")
+    assert first.status_code == second.status_code == third.status_code == 201
+    day = first.json()["created_at"][:10]
+    base = f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records"
+    headers = _headers(write=False)
+
+    combined = client.get(
+        f"{base}?source=manual&created_from={day}&created_to={day}&sort=public_number&direction=asc",
+        headers=headers,
+    )
+    assert combined.status_code == 200
+    assert [item["public_number"] for item in combined.json()["items"]] == ["N-1-0001", "N-1-0003"]
+    assert combined.json()["total"] == 2
+
+    empty_search = client.get(f"{base}?q=", headers=headers)
+    assert empty_search.json()["total"] == 3
+    later = client.get(f"{base}?created_from=2999-01-01", headers=headers)
+    assert later.json()["total"] == 0
+    assert later.json()["items"] == []
+
+    for query in (
+        "sort=status",
+        "direction=sideways",
+        "source=nope",
+        "form_id=not-a-uuid",
+        "created_from=13-01-2026",
+        "created_to=2026-13-01",
+        "created_from=2026-10-22&created_to=2026-10-01",
+        "limit=0",
+        "limit=101",
+        "offset=-1",
+    ):
+        rejected = client.get(f"{base}?{query}", headers=headers)
+        assert rejected.status_code == 422, query
+
+    page = client.get(f"{base}?limit=1&offset=1&sort=public_number&direction=asc", headers=headers)
+    assert page.json()["items"][0]["public_number"] == "N-1-0002"
+    assert page.json()["total"] == 3
+    past = client.get(f"{base}?limit=1&offset=50&sort=public_number&direction=asc", headers=headers)
+    assert past.status_code == 200
+    assert past.json()["items"] == []
+    assert past.json()["total"] == 3
+
+    connection = connect(tmp_path / "projects.sqlite")
+    connection.execute(
+        "UPDATE records SET created_at = ? WHERE project_id = ?",
+        ("2026-10-20T00:00:00+00:00", project_id),
+    )
+    connection.commit()
+    connection.close()
+    tied = client.get(f"{base}?sort=created_at&direction=asc&limit=10", headers=headers)
+    assert [item["id"] for item in tied.json()["items"]] == sorted(
+        item["id"] for item in tied.json()["items"]
+    )
+    assert len(tied.json()["items"]) == 3
+
+
+def test_custom_fields_validate_on_the_published_schema_without_consuming_a_number(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A)
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id = _project(client)
+    form_id = _form(client, project_id, name="Typed enquiry")
+    _add(client, project_id, form_id, _text_field())
+    _add(
+        client,
+        project_id,
+        form_id,
+        {"field_key": "contact_email", "label": "Email", "field_type": "email", "required": False, "section_name": "Contact"},
+    )
+    _add(
+        client,
+        project_id,
+        form_id,
+        {
+            "field_key": "seats",
+            "label": "Seats",
+            "field_type": "number",
+            "required": False,
+            "section_name": "Value",
+            "min_value": 1,
+            "max_value": 10,
+        },
+    )
+    _add(
+        client,
+        project_id,
+        form_id,
+        {"field_key": "phone", "label": "Mobile", "field_type": "mobile", "required": False, "section_name": "Contact"},
+    )
+    _add(
+        client,
+        project_id,
+        form_id,
+        {"field_key": "visit_date", "label": "Visit date", "field_type": "date", "required": False, "section_name": "Contact"},
+    )
+    _add(
+        client,
+        project_id,
+        form_id,
+        {
+            "field_key": "consent",
+            "label": "Consent",
+            "field_type": "checkbox",
+            "required": True,
+            "section_name": "Contact",
+        },
+    )
+    _add(
+        client,
+        project_id,
+        form_id,
+        {
+            "field_key": "tags",
+            "label": "Tags",
+            "field_type": "multi_select",
+            "required": False,
+            "section_name": "Choice",
+            "options": [{"value": "north", "label": "North"}, {"value": "south", "label": "South"}],
+        },
+    )
+    published = _publish(client, project_id, form_id)
+    assert published.status_code == 201
+    refused = _create(client, project_id, form_id, {"school_name": "North", "contact_email": "not-an-email"})
+    assert refused.status_code == 422
+    assert "email" in refused.json()["error"]["fields"]["contact_email"]
+    low = _create(client, project_id, form_id, {"school_name": "North", "consent": True, "seats": 0})
+    assert low.status_code == 422
+    assert "minimum" in low.json()["error"]["fields"]["seats"]
+    bad_tags = _create(client, project_id, form_id, {"school_name": "North", "consent": True, "tags": ["later"]})
+    assert bad_tags.status_code == 422
+    unknown = _create(client, project_id, form_id, {"school_name": "North", "consent": True, "nickname": "X"})
+    assert unknown.status_code == 422
+    connection = connect(tmp_path / "projects.sqlite")
+    assert connection.execute("SELECT COUNT(*) AS count FROM records").fetchone()["count"] == 0
+    connection.close()
+    created = _create(
+        client,
+        project_id,
+        form_id,
+        {
+            "school_name": "North school",
+            "contact_email": "office@example.com",
+            "seats": 4,
+            "phone": "9876543210",
+            "visit_date": "2026-10-20",
+            "consent": True,
+            "tags": ["north", "south"],
+        },
+        public_number="FAKE-0009",
+    )
+    assert created.status_code == 201
+    assert created.json()["public_number"] == "N-1-0001"
+    assert created.json()["values"]["seats"] == 4
+    assert created.json()["values"]["tags"] == ["north", "south"]
+    assert created.json()["values"]["consent"] is True
+
+    blocked = _form(client, project_id, name="Blocked types")
+    _add(
+        client,
+        project_id,
+        blocked,
+        {"field_key": "upload", "label": "Upload", "field_type": "file", "required": True, "section_name": "Files"},
+    )
+    _add(
+        client,
+        project_id,
+        blocked,
+        {"field_key": "serial", "label": "Serial", "field_type": "auto_number", "required": True, "section_name": "Files"},
+    )
+    assert _publish(client, project_id, blocked).status_code == 201
+    file_row = _create(client, project_id, blocked, {})
+    assert file_row.status_code == 422
+    assert "File upload" in file_row.json()["error"]["fields"]["upload"]
+    assert "Auto-number" in file_row.json()["error"]["fields"]["serial"]
+
+
+def test_archive_can_be_repeated_without_changing_the_deletion_time(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A)
+    _allow(platform, TENANT_B)
+    platform.users_by_tenant[str(TENANT_A)] = [
+        _person(USER_ID, "manager@example.com"),
+        _person(OTHER_ID, "member@example.com"),
+    ]
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id, form_id, _version = _ready(client)
+    created = _create(client, project_id, form_id, {"school_name": "Keep me", "priority": "hot"})
+    assert created.status_code == 201
+    record_id = created.json()["id"]
+    archived = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{record_id}/archive",
+        headers=_headers(write=True),
+        json={"expected_updated_at": created.json()["updated_at"]},
+    )
+    assert archived.status_code == 200
+    connection = connect(tmp_path / "projects.sqlite")
+    stamp = connection.execute("SELECT deleted_at FROM records WHERE id = ?", (record_id,)).fetchone()["deleted_at"]
+    connection.close()
+    assert stamp
+    again = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{record_id}/archive",
+        headers=_headers(write=True),
+        json={"expected_updated_at": created.json()["updated_at"]},
+    )
+    assert again.status_code == 404
+    edited = client.patch(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{record_id}",
+        headers=_headers(write=True),
+        json={"expected_updated_at": created.json()["updated_at"], "values": {"school_name": "Changed"}},
+    )
+    assert edited.status_code == 404
+    connection = connect(tmp_path / "projects.sqlite")
+    row = connection.execute(
+        "SELECT deleted_at, form_version_id, public_number FROM records WHERE id = ?",
+        (record_id,),
+    ).fetchone()
+    values = connection.execute("SELECT COUNT(*) AS count FROM record_values WHERE record_id = ?", (record_id,)).fetchone()
+    connection.close()
+    assert row["deleted_at"] == stamp
+    assert row["form_version_id"] == created.json()["form_version_id"]
+    assert row["public_number"] == created.json()["public_number"]
+    assert values["count"] >= 1
+    hidden = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records?q=Keep",
+        headers=_headers(write=False),
+    )
+    assert hidden.json()["total"] == 0
+
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    _become(platform, OTHER_ID, "member@example.com")
+    own = _create(client, project_id, form_id, {"school_name": "Member row"})
+    assert own.status_code == 201
+    _become(platform, USER_ID, "manager@example.com")
+    manager_row = _create(client, project_id, form_id, {"school_name": "Manager row"})
+    assert manager_row.status_code == 201
+    _become(platform, OTHER_ID, "member@example.com")
+    stolen = client.patch(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{manager_row.json()['id']}",
+        headers=_headers(write=True),
+        json={"expected_updated_at": manager_row.json()["updated_at"], "values": {"school_name": "Stolen"}},
+    )
+    assert stolen.status_code == 404
+    assert "Manager row" not in stolen.text
+    listed = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records",
+        headers=_headers(write=False),
+    )
+    assert listed.json()["total"] == 1
+    assert listed.json()["items"][0]["id"] == own.json()["id"]
+
+
 def _field_id(client, project_id: str, form_id: str, key: str) -> str:
     form = client.get(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/forms/{form_id}",
