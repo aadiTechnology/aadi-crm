@@ -160,8 +160,18 @@ button[disabled] {
   background: white;
 }
 
+.form-render input,
+.form-render select,
+.form-render textarea {
+  width: 100%;
+}
+
 @media (max-width: 40rem) {
   .shell {
     padding-inline: 0.75rem;
+  }
+
+  .row-actions {
+    align-items: stretch;
   }
 }

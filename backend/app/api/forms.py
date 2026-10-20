@@ -1,4 +1,4 @@
-"""Project form definitions and fields. Draft definitions only; no versions or records."""
+"""Project form definitions, draft preview, and immutable published versions."""
 
 import re
 from datetime import datetime
@@ -10,6 +10,15 @@ from fastapi.responses import JSONResponse
 
 from app.api.projects import _body, _error, _load_project, _open_module, get_connection
 from app.api.shell import get_platform_client
+from app.form_versions import (
+    DuplicatePublish,
+    InvalidDraft,
+    NoPublishedVersion,
+    get_version,
+    list_versions,
+    publish_form,
+    replace_draft_from_published,
+)
 from app.forms_store import (
     DuplicateFieldKey,
     DuplicateFormName,
@@ -613,6 +622,148 @@ def post_remove_field(
         field_id=str(field_id),
         actor_id=opened.user_id,
     )
+    if updated is None:
+        return _error(404)
+    return JSONResponse(status_code=200, content=updated.as_dict())
+
+
+def _scoped_form(connection, tenant_id: str, project_id: str, form_id: str):
+    form = get_form(connection, tenant_id, project_id, form_id)
+    if form is None:
+        return _error(404)
+    return form
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/forms/{form_id}/preview")
+def read_preview(
+    tenant_id: UUID,
+    project_id: UUID,
+    form_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open_form_project(
+        tenant_id, project_id, request, platform, connection, write=False, action="preview_forms"
+    )
+    if isinstance(opened, JSONResponse):
+        return opened
+    form = _scoped_form(connection, str(tenant_id), str(project_id), str(form_id))
+    if isinstance(form, JSONResponse):
+        return form
+    body = form.as_dict()
+    return JSONResponse(
+        status_code=200,
+        content={
+            "form_id": body["id"],
+            "name": body["name"],
+            "description": body["description"],
+            "source": "draft",
+            "fields": body["fields"],
+        },
+    )
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/forms/{form_id}/versions")
+def read_versions(
+    tenant_id: UUID,
+    project_id: UUID,
+    form_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open_form_project(
+        tenant_id, project_id, request, platform, connection, write=False, action="render_forms"
+    )
+    if isinstance(opened, JSONResponse):
+        return opened
+    versions = list_versions(connection, str(tenant_id), str(project_id), str(form_id))
+    if versions is None:
+        return _error(404)
+    return JSONResponse(status_code=200, content={"items": [version.as_dict() for version in versions]})
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/forms/{form_id}/versions")
+def post_version(
+    tenant_id: UUID,
+    project_id: UUID,
+    form_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open_form_project(
+        tenant_id, project_id, request, platform, connection, write=True, action="publish_forms"
+    )
+    if isinstance(opened, JSONResponse):
+        return opened
+    try:
+        published = publish_form(
+            connection,
+            tenant_id=str(tenant_id),
+            project_id=str(project_id),
+            form_id=str(form_id),
+            actor_id=opened.user_id,
+        )
+    except InvalidDraft as exc:
+        return _error(422, exc.message)
+    except DuplicatePublish:
+        return _error(409, "This draft is already published.")
+    if published is None:
+        return _error(404)
+    return JSONResponse(status_code=201, content=published.as_dict())
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/forms/{form_id}/versions/{version_id}")
+def read_version(
+    tenant_id: UUID,
+    project_id: UUID,
+    form_id: UUID,
+    version_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open_form_project(
+        tenant_id, project_id, request, platform, connection, write=False, action="render_forms"
+    )
+    if isinstance(opened, JSONResponse):
+        return opened
+    version = get_version(connection, str(tenant_id), str(project_id), str(form_id), str(version_id))
+    if version is None:
+        return _error(404)
+    return JSONResponse(status_code=200, content=version.as_dict())
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/forms/{form_id}/draft")
+def post_draft_from_published(
+    tenant_id: UUID,
+    project_id: UUID,
+    form_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open_form_project(
+        tenant_id, project_id, request, platform, connection, write=True, action="publish_forms"
+    )
+    if isinstance(opened, JSONResponse):
+        return opened
+    try:
+        updated = replace_draft_from_published(
+            connection,
+            tenant_id=str(tenant_id),
+            project_id=str(project_id),
+            form_id=str(form_id),
+            actor_id=opened.user_id,
+        )
+    except NoPublishedVersion:
+        return _error(409, "Publish a version before replacing the draft.")
+    except InvalidDraft as exc:
+        return _error(422, exc.message)
+    except DuplicateFormName:
+        return _error(409, "A form with this name already exists in the project.")
     if updated is None:
         return _error(404)
     return JSONResponse(status_code=200, content=updated.as_dict())

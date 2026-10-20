@@ -1,4 +1,8 @@
-"""CRM-owned form definitions and ordered fields. No form versions are stored."""
+"""CRM-owned form definitions and ordered fields.
+
+The rows in this module are the working draft. Published snapshots live in
+form_versions and are not updated here.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from uuid import uuid4
 _FORM_COLUMNS = (
     "id, tenant_id, project_id, name, description, status, created_by, updated_by, created_at, updated_at"
 )
+_FORM_READ = _FORM_COLUMNS + ", current_published_version_id"
 _FIELD_COLUMNS = (
     "id, tenant_id, project_id, form_id, field_key, label, field_type, required, "
     "help_text, section_name, position, config_json, created_at, updated_at"
@@ -70,6 +75,8 @@ class FormDefinitionRow:
     created_at: str
     updated_at: str
     fields: tuple[FormFieldRow, ...]
+    current_published_version_id: str | None = None
+    current_published_version_number: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -83,6 +90,8 @@ class FormDefinitionRow:
             "updated_by": self.updated_by,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "current_published_version_id": self.current_published_version_id,
+            "current_published_version_number": self.current_published_version_number,
             "fields": [field.as_dict() for field in self.fields],
         }
 
@@ -94,7 +103,7 @@ def list_forms(
 ) -> list[FormDefinitionRow]:
     rows = connection.execute(
         f"""
-        SELECT {_FORM_COLUMNS}
+        SELECT {_FORM_READ}
         FROM form_definitions
         WHERE tenant_id = ? AND project_id = ?
         ORDER BY lower(name), id
@@ -112,7 +121,7 @@ def get_form(
 ) -> FormDefinitionRow | None:
     row = connection.execute(
         f"""
-        SELECT {_FORM_COLUMNS}
+        SELECT {_FORM_READ}
         FROM form_definitions
         WHERE tenant_id = ? AND project_id = ? AND id = ?
         """,
@@ -466,7 +475,21 @@ def _form(connection: sqlite3.Connection, row: sqlite3.Row) -> FormDefinitionRow
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         fields=tuple(_field(item) for item in field_rows),
+        current_published_version_id=row["current_published_version_id"],
+        current_published_version_number=_published_number(connection, row["current_published_version_id"]),
     )
+
+
+def _published_number(connection: sqlite3.Connection, version_id: str | None) -> int | None:
+    if not version_id:
+        return None
+    found = connection.execute(
+        "SELECT version_number FROM form_versions WHERE id = ?",
+        (version_id,),
+    ).fetchone()
+    if found is None:
+        return None
+    return int(found["version_number"])
 
 
 def _field(row: sqlite3.Row) -> FormFieldRow:

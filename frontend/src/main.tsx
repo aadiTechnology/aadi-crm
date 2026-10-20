@@ -15,6 +15,8 @@ const router = createBrowserRouter([
   { path: '/tenants/:tenantId/forms', element: <CrmShellPage /> },
   { path: '/tenants/:tenantId/forms/:projectId', element: <CrmShellPage /> },
   { path: '/tenants/:tenantId/forms/:projectId/new', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms/:projectId/:formId/preview', element: <CrmShellPage /> },
+  { path: '/tenants/:tenantId/forms/:projectId/:formId/versions/:versionId', element: <CrmShellPage /> },
   { path: '/tenants/:tenantId/forms/:projectId/:formId', element: <CrmShellPage /> },
 ])
 

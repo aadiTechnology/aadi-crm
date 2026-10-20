@@ -368,6 +368,8 @@ export type FormField = {
   pad_width?: number
 }
 
+export type RenderField = Omit<FormField, 'id'> & { id?: string }
+
 export type FormDefinition = {
   id: string
   tenant_id: string
@@ -379,7 +381,32 @@ export type FormDefinition = {
   updated_by: string | null
   created_at: string
   updated_at: string
+  current_published_version_id?: string | null
+  current_published_version_number?: number | null
   fields: FormField[]
+}
+
+export type FormPreview = {
+  form_id: string
+  name: string
+  description: string
+  source: 'draft'
+  fields: RenderField[]
+}
+
+export type FormVersion = {
+  id: string
+  tenant_id: string
+  project_id: string
+  form_id: string
+  version_number: number
+  status: 'current' | 'published'
+  current: boolean
+  published_by: string
+  published_at: string
+  name: string
+  description: string
+  fields: RenderField[]
 }
 
 export type FormFieldInput = {
@@ -485,6 +512,45 @@ export function removeFormField(
   fieldId: string,
 ): Promise<FormDefinition> {
   return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/fields/${fieldId}/remove`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function previewForm(tenantId: string, projectId: string, formId: string): Promise<FormPreview> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/preview`)
+}
+
+export function listFormVersions(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+): Promise<{ items: FormVersion[] }> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/versions`)
+}
+
+export function publishForm(tenantId: string, projectId: string, formId: string): Promise<FormVersion> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/versions`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function getFormVersion(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+  versionId: string,
+): Promise<FormVersion> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/versions/${versionId}`)
+}
+
+export function replaceDraftFromPublished(
+  tenantId: string,
+  projectId: string,
+  formId: string,
+): Promise<FormDefinition> {
+  return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/draft`, {
     method: 'POST',
     headers: mutationHeaders(),
   })

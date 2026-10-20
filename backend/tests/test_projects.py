@@ -507,6 +507,7 @@ def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
         "001_projects.sql",
         "002_project_memberships.sql",
         "003_form_definitions.sql",
+        "004_form_versions.sql",
     ]
     assert connection.execute("SELECT COUNT(*) AS count FROM form_definitions").fetchone()["count"] == 0
     stored = connection.execute("SELECT name, status FROM projects").fetchone()

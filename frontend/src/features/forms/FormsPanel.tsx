@@ -1,22 +1,30 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import { FormRenderer } from '@/features/forms/FormRenderer'
 import {
   addFormField,
   ApiError,
   createForm,
   getForm,
+  getFormVersion,
   getProject,
+  listFormVersions,
   listForms,
   listProjects,
+  previewForm,
+  publishForm,
   removeFormField,
   reorderFormFields,
+  replaceDraftFromPublished,
   updateForm,
   updateFormField,
   type FormDefinition,
   type FormField,
   type FormFieldInput,
   type FormFieldType,
+  type FormPreview,
+  type FormVersion,
   type Project,
 } from '@/services/platform'
 
@@ -74,6 +82,21 @@ type FormListState =
 type DetailState =
   | { status: 'loading' }
   | { status: 'ready'; project: Project; form: FormDefinition }
+  | { status: 'error'; message: string }
+
+type VersionState =
+  | { status: 'loading' }
+  | { status: 'ready'; items: FormVersion[] }
+  | { status: 'error'; message: string }
+
+type PreviewState =
+  | { status: 'loading' }
+  | { status: 'ready'; project: Project; preview: FormPreview }
+  | { status: 'error'; message: string }
+
+type PublishedState =
+  | { status: 'loading' }
+  | { status: 'ready'; project: Project; version: FormVersion }
   | { status: 'error'; message: string }
 
 function messageFrom(error: unknown): string {
@@ -450,10 +473,11 @@ function FieldEditor({
 }
 
 export function FormsPanel({ tenantId }: { tenantId: string }) {
-  const { projectId, formId } = useParams()
+  const { projectId, formId, versionId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const onNew = location.pathname.endsWith('/new')
+  const previewing = location.pathname.endsWith('/preview')
   const [projects, setProjects] = useState<ProjectListState>({ status: 'loading' })
   const [forms, setForms] = useState<FormListState>({ status: 'loading' })
   const [detail, setDetail] = useState<DetailState>({ status: 'loading' })
@@ -464,11 +488,16 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
   const [submitting, setSubmitting] = useState(false)
   const [draft, setDraft] = useState<Draft>(emptyDraft())
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [versions, setVersions] = useState<VersionState>({ status: 'loading' })
+  const [versionError, setVersionError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<PreviewState>({ status: 'loading' })
+  const [published, setPublished] = useState<PublishedState>({ status: 'loading' })
 
   useEffect(() => {
     setSubmitting(false)
     setFormError(null)
     setFieldError(null)
+    setVersionError(null)
     setEditingId(null)
     setDraft(emptyDraft())
   }, [location.pathname])
@@ -558,15 +587,21 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
   }, [onNew, projectId, tenantId])
 
   useEffect(() => {
-    if (!projectId || !formId || onNew) {
+    if (!projectId || !formId || onNew || previewing || versionId) {
       return
     }
     let cancelled = false
     setDetail({ status: 'loading' })
-    Promise.all([getProject(tenantId, projectId), getForm(tenantId, projectId, formId)])
-      .then(([project, form]) => {
+    setVersions({ status: 'loading' })
+    Promise.all([
+      getProject(tenantId, projectId),
+      getForm(tenantId, projectId, formId),
+      listFormVersions(tenantId, projectId, formId),
+    ])
+      .then(([project, form, listed]) => {
         if (!cancelled) {
           setDetail({ status: 'ready', project, form })
+          setVersions({ status: 'ready', items: listed.items })
           setName(form.name)
           setDescription(form.description)
         }
@@ -574,12 +609,60 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
       .catch((error: unknown) => {
         if (!cancelled) {
           setDetail({ status: 'error', message: messageFrom(error) })
+          setVersions({ status: 'error', message: messageFrom(error) })
         }
       })
     return () => {
       cancelled = true
     }
-  }, [formId, onNew, projectId, tenantId])
+  }, [formId, onNew, previewing, projectId, tenantId, versionId])
+
+  useEffect(() => {
+    if (!projectId || !formId || !previewing) {
+      return
+    }
+    let cancelled = false
+    setPreview({ status: 'loading' })
+    Promise.all([getProject(tenantId, projectId), previewForm(tenantId, projectId, formId)])
+      .then(([project, body]) => {
+        if (!cancelled) {
+          setPreview({ status: 'ready', project, preview: body })
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setPreview({ status: 'error', message: messageFrom(error) })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [formId, previewing, projectId, tenantId])
+
+  useEffect(() => {
+    if (!projectId || !formId || !versionId) {
+      return
+    }
+    let cancelled = false
+    setPublished({ status: 'loading' })
+    Promise.all([
+      getProject(tenantId, projectId),
+      getFormVersion(tenantId, projectId, formId, versionId),
+    ])
+      .then(([project, version]) => {
+        if (!cancelled) {
+          setPublished({ status: 'ready', project, version })
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setPublished({ status: 'error', message: messageFrom(error) })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [formId, projectId, tenantId, versionId])
 
   async function onCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -685,6 +768,55 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     }
   }
 
+  async function reloadDetail() {
+    if (!projectId || !formId) {
+      return
+    }
+    const [project, form, listed] = await Promise.all([
+      getProject(tenantId, projectId),
+      getForm(tenantId, projectId, formId),
+      listFormVersions(tenantId, projectId, formId),
+    ])
+    setDetail({ status: 'ready', project, form })
+    setVersions({ status: 'ready', items: listed.items })
+    setName(form.name)
+    setDescription(form.description)
+  }
+
+  async function onPublish() {
+    if (!projectId || !formId) {
+      return
+    }
+    setSubmitting(true)
+    setVersionError(null)
+    try {
+      await publishForm(tenantId, projectId, formId)
+      await reloadDetail()
+      setSubmitting(false)
+    } catch (error) {
+      setVersionError(messageFrom(error))
+      setSubmitting(false)
+    }
+  }
+
+  async function onReplaceDraft() {
+    if (!projectId || !formId) {
+      return
+    }
+    setSubmitting(true)
+    setVersionError(null)
+    try {
+      await replaceDraftFromPublished(tenantId, projectId, formId)
+      await reloadDetail()
+      setEditingId(null)
+      setDraft(emptyDraft())
+      setSubmitting(false)
+    } catch (error) {
+      setVersionError(messageFrom(error))
+      setSubmitting(false)
+    }
+  }
+
   async function onRemove(field: FormField) {
     if (detail.status !== 'ready' || !projectId || !formId) {
       return
@@ -755,7 +887,12 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
               <li key={form.id}>
                 <Link to={`/tenants/${tenantId}/forms/${projectId}/${form.id}`}>
                   <span>{form.name}</span>
-                  <span className="muted">{form.fields.length} fields</span>
+                  <span className="muted">
+                    {form.fields.length} fields
+                    {form.current_published_version_number
+                      ? ` · Version ${form.current_published_version_number}`
+                      : ''}
+                  </span>
                 </Link>
               </li>
             ))}
@@ -806,6 +943,53 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     )
   }
 
+  if (previewing && projectId && formId) {
+    return (
+      <section className="stack" aria-labelledby="form-preview-heading">
+        <Link to={`/tenants/${tenantId}/forms/${projectId}/${formId}`}>Back to form</Link>
+        <h2 id="form-preview-heading">Preview</h2>
+        {preview.status === 'loading' ? <p role="status">Loading preview</p> : null}
+        {preview.status === 'error' ? (
+          <p role="alert" className="alert alert-error">
+            {preview.message}
+          </p>
+        ) : null}
+        {preview.status === 'ready' ? (
+          <FormRenderer
+            name={preview.preview.name}
+            description={preview.preview.description}
+            fields={preview.preview.fields}
+            mode="preview"
+          />
+        ) : null}
+      </section>
+    )
+  }
+
+  if (versionId && projectId && formId) {
+    return (
+      <section className="stack" aria-labelledby="form-render-heading">
+        <Link to={`/tenants/${tenantId}/forms/${projectId}/${formId}`}>Back to form</Link>
+        <h2 id="form-render-heading">Published form</h2>
+        {published.status === 'loading' ? <p role="status">Loading published form</p> : null}
+        {published.status === 'error' ? (
+          <p role="alert" className="alert alert-error">
+            {published.message}
+          </p>
+        ) : null}
+        {published.status === 'ready' ? (
+          <FormRenderer
+            name={published.version.name}
+            description={published.version.description}
+            fields={published.version.fields}
+            mode="published"
+            versionNumber={published.version.version_number}
+          />
+        ) : null}
+      </section>
+    )
+  }
+
   const canManage = detail.status === 'ready' && detail.project.access.can_manage_forms
   const fields = detail.status === 'ready' ? detail.form.fields : []
   let previousSection: string | null = null
@@ -825,6 +1009,51 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
           <p>
             Status <strong>Draft</strong>
           </p>
+          <p>
+            {detail.form.current_published_version_number
+              ? `Current published version ${detail.form.current_published_version_number}`
+              : 'No published version yet.'}
+          </p>
+          {canManage ? (
+            <div className="row-actions">
+              <Link className="button-link" to={`/tenants/${tenantId}/forms/${projectId}/${formId}/preview`}>
+                Preview draft
+              </Link>
+              <button type="button" disabled={submitting} onClick={() => void onPublish()}>
+                {submitting ? 'Publishing' : 'Publish version'}
+              </button>
+              {detail.form.current_published_version_id ? (
+                <button type="button" disabled={submitting} onClick={() => void onReplaceDraft()}>
+                  Replace draft with published version
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {versionError ? (
+            <p role="alert" className="alert alert-error">
+              {versionError}
+            </p>
+          ) : null}
+          <h3>Published versions</h3>
+          {versions.status === 'loading' ? <p role="status">Loading versions</p> : null}
+          {versions.status === 'error' ? (
+            <p role="alert" className="alert alert-error">
+              {versions.message}
+            </p>
+          ) : null}
+          {versions.status === 'ready' && versions.items.length === 0 ? <p>No versions have been published.</p> : null}
+          {versions.status === 'ready' && versions.items.length > 0 ? (
+            <ul className="project-list">
+              {versions.items.map((version) => (
+                <li key={version.id}>
+                  <Link to={`/tenants/${tenantId}/forms/${projectId}/${formId}/versions/${version.id}`}>
+                    <span>Render version {version.version_number}</span>
+                    <span className="muted">{version.current ? 'Current' : 'Published'}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {detail.project.status === 'archived' ? (
             <p>This project is archived. A project manager can still change its form definitions.</p>
           ) : null}

@@ -157,6 +157,9 @@ it('creates a form, saves fields, reorders them, and shows the same order after 
     if (url.pathname.endsWith(`/forms/${FORM_ID}`) && method === 'GET') {
       return json(stored)
     }
+    if (url.pathname.endsWith('/versions')) {
+      return json({ items: [] })
+    }
     return json({ error: { message: 'Unexpected request' } }, 500)
   })
 
@@ -217,6 +220,9 @@ it('shows a duplicate identifier error and keeps a project member from editing',
     if (url.pathname.endsWith('/fields') && method === 'POST') {
       return json({ error: { message: 'Field identifier is already used on this form.' } }, 409)
     }
+    if (url.pathname.endsWith('/versions')) {
+      return json({ items: [] })
+    }
     return json({ error: { message: 'Unexpected request' } }, 500)
   })
 
@@ -238,6 +244,9 @@ it('shows a duplicate identifier error and keeps a project member from editing',
     }
     if (url.pathname.endsWith(`/forms/${FORM_ID}`)) {
       return json(stored)
+    }
+    if (url.pathname.endsWith('/versions')) {
+      return json({ items: [] })
     }
     return json({ error: { message: 'Unexpected request' } }, 500)
   })
@@ -269,6 +278,9 @@ it('blocks an empty picklist before saving', async () => {
     }
     if (url.pathname.endsWith(`/forms/${FORM_ID}`)) {
       return json(formDefinition([]))
+    }
+    if (url.pathname.endsWith('/versions')) {
+      return json({ items: [] })
     }
     return json({ error: { message: 'Unexpected request' } }, 500)
   })

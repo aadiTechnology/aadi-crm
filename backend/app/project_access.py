@@ -33,6 +33,11 @@ ACTIONS = {
     # may read them. crm.project_management.manage remains the only tenant-wide key.
     "view_forms": frozenset({PROJECT_MANAGER, PROJECT_MEMBER}),
     "manage_forms": frozenset({PROJECT_MANAGER}),
+    # Publishing stays with the project manager. A member may render a published
+    # version. Lead read does not grant either action by itself.
+    "preview_forms": frozenset({PROJECT_MANAGER}),
+    "publish_forms": frozenset({PROJECT_MANAGER}),
+    "render_forms": frozenset({PROJECT_MANAGER, PROJECT_MEMBER}),
 }
 
 
