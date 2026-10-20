@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { FormsPanel } from '@/features/forms/FormsPanel'
 import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
+import { RecordsPanel } from '@/features/records/RecordsPanel'
 import { LoadingSkeleton, NavIcon } from '@/ui/chrome'
 import {
   accessMessage,
@@ -65,6 +66,9 @@ function projectsAllowed(access: ProductAccess, permissions: string[]): boolean 
 }
 
 function workspacePage(pathname: string): string {
+  if (pathname.includes('/records')) {
+    return 'Records'
+  }
   if (pathname.includes('/forms')) {
     return 'Forms'
   }
@@ -83,7 +87,8 @@ export function CrmShellPage() {
   const navigate = useNavigate()
   const onLeads = location.pathname.endsWith('/leads')
   const onForms = location.pathname.includes('/forms')
-  const onProjects = location.pathname.includes('/projects') && !onForms
+  const onRecords = location.pathname.includes('/records')
+  const onProjects = location.pathname.includes('/projects') && !onForms && !onRecords
   const [sessionVersion, setSessionVersion] = useState(0)
   const [screen, setScreen] = useState<Screen>({ status: 'loading' })
   const [email, setEmail] = useState('')
@@ -322,7 +327,7 @@ export function CrmShellPage() {
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}`}
-              aria-current={!onLeads && !onProjects && !onForms ? 'page' : undefined}
+              aria-current={!onLeads && !onProjects && !onForms && !onRecords ? 'page' : undefined}
             >
               <NavIcon name="overview" />
               <span className="nav-label">Overview</span>
@@ -366,6 +371,19 @@ export function CrmShellPage() {
           ) : null}
           {screen.status === 'shell' && !screen.canOpenProjects ? (
             <p className="nav-note">Forms is not available for this sign-in.</p>
+          ) : null}
+          {screen.status === 'shell' && screen.canOpenProjects ? (
+            <Link
+              className="nav-link"
+              to={`/tenants/${tenantIdForNav}/records`}
+              aria-current={onRecords ? 'page' : undefined}
+            >
+              <NavIcon name="records" />
+              <span className="nav-label">Records</span>
+            </Link>
+          ) : null}
+          {screen.status === 'shell' && !screen.canOpenProjects ? (
+            <p className="nav-note">Records is not available for this sign-in.</p>
           ) : null}
         </nav>
         <button
@@ -448,7 +466,7 @@ export function CrmShellPage() {
 
           {screen.status === 'shell' ? (
             <section className="stack" aria-label={screen.access.product_name}>
-              {!onProjects && !onForms && !onLeads ? <h2 id="crm-heading">Overview</h2> : null}
+              {!onProjects && !onForms && !onLeads && !onRecords ? <h2 id="crm-heading">Overview</h2> : null}
               {screen.access.available ? (
                 <p className="alert alert-ok" role="status">
                   {screen.access.product_name} is available in this organization.
@@ -460,12 +478,18 @@ export function CrmShellPage() {
               )}
               {onProjects && screen.canOpenProjects ? <ProjectsPanel tenantId={screen.access.tenant_id} /> : null}
               {onForms && screen.canOpenProjects ? <FormsPanel tenantId={screen.access.tenant_id} /> : null}
+              {onRecords && screen.canOpenProjects ? <RecordsPanel tenantId={screen.access.tenant_id} /> : null}
               {onProjects && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
               ) : null}
               {onForms && !screen.canOpenProjects ? (
+                <p role="alert" className="alert alert-error">
+                  You do not have permission to perform this action.
+                </p>
+              ) : null}
+              {onRecords && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>

@@ -186,10 +186,8 @@ def test_publish_versions_stay_immutable_and_a_new_draft_copies_the_snapshot(tmp
     with __import__("pytest").raises(sqlite3.IntegrityError):
         connection.execute("DELETE FROM form_versions WHERE id = ?", (first["id"],))
     connection.rollback()
-    records = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'records'"
-    ).fetchone()
-    assert records is None
+    records = connection.execute("SELECT COUNT(*) AS count FROM records").fetchone()
+    assert records["count"] == 0
     connection.close()
     final_rows, _pointers = _versions(path)
     assert final_rows[0][2] == before_rows[0][2]
@@ -519,9 +517,7 @@ def test_version_migration_preserves_drafts_and_leaves_room_for_a_record_referen
         row["version"]
         for row in connection.execute("SELECT version FROM crm_schema_migrations")
     }
-    records = connection.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'records'"
-    ).fetchone()
+    record_count = connection.execute("SELECT COUNT(*) AS count FROM records").fetchone()
     connection.close()
     assert form["name"] == "Enquiry draft"
     assert form["status"] == "draft"
@@ -530,7 +526,8 @@ def test_version_migration_preserves_drafts_and_leaves_room_for_a_record_referen
     assert field["position"] == 0
     assert versions["count"] == 0
     assert "004_form_versions.sql" in applied
-    assert records is None
+    assert "005_records.sql" in applied
+    assert record_count["count"] == 0
 
 
 def test_development_copy_gains_versions_without_changing_the_original(tmp_path) -> None:

@@ -1,0 +1,757 @@
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+
+import { FormRenderer, type FormValue } from '@/features/forms/FormRenderer'
+import { EmptyState, LoadingSkeleton } from '@/ui/chrome'
+import {
+  ApiError,
+  archiveRecord,
+  createRecord,
+  getFormVersion,
+  getProject,
+  getRecord,
+  listForms,
+  listProjects,
+  listRecords,
+  updateRecord,
+  type CrmRecord,
+  type FormDefinition,
+  type FormVersion,
+  type Project,
+  type RecordListItem,
+  type RecordQuery,
+  type RecordValue,
+  type RenderField,
+} from '@/services/platform'
+
+const PAGE_SIZE = 25
+const SOURCES: { value: string; label: string }[] = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'website', label: 'Website' },
+  { value: 'phone_call', label: 'Phone Call' },
+  { value: 'justdial', label: 'JustDial' },
+  { value: 'meta_ad', label: 'Meta Ad' },
+  { value: 'referral', label: 'Referral' },
+  { value: 'import', label: 'Import' },
+  { value: 'other', label: 'Other' },
+]
+
+function formatWhen(value: string): string {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString()
+}
+
+function messageFrom(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.message
+  }
+  return 'The request could not be completed.'
+}
+
+function fieldsFrom(error: unknown): Record<string, string> {
+  return error instanceof ApiError ? error.fields : {}
+}
+
+function optionLabel(field: RenderField, value: string): string {
+  return field.options?.find((option) => option.value === value)?.label ?? value
+}
+
+function shownValue(field: RenderField, value: RecordValue | undefined): string {
+  if (value === undefined || value === null || value === '') {
+    return 'Not entered'
+  }
+  if (field.field_type === 'checkbox') {
+    return value === true ? 'Yes' : 'No'
+  }
+  if ((field.field_type === 'dropdown' || field.field_type === 'radio') && typeof value === 'string') {
+    return optionLabel(field, value)
+  }
+  if (field.field_type === 'multi_select' && Array.isArray(value)) {
+    return value.length > 0 ? value.map((item) => optionLabel(field, item)).join(', ') : 'Not entered'
+  }
+  return String(value)
+}
+
+function formValues(fields: RenderField[], stored: Record<string, RecordValue>): Record<string, FormValue> {
+  const values: Record<string, FormValue> = {}
+  for (const field of fields) {
+    const value = stored[field.field_key]
+    if (field.field_type === 'checkbox') {
+      values[field.field_key] = value === true
+      continue
+    }
+    if (field.field_type === 'multi_select') {
+      values[field.field_key] = Array.isArray(value) ? value : []
+      continue
+    }
+    if (value === undefined || value === null) {
+      values[field.field_key] = ''
+      continue
+    }
+    values[field.field_key] = String(value)
+  }
+  return values
+}
+
+function payloadValues(fields: RenderField[], values: Record<string, FormValue>): Record<string, RecordValue> {
+  const payload: Record<string, RecordValue> = {}
+  for (const field of fields) {
+    const value = values[field.field_key]
+    if (field.field_type === 'file' || field.field_type === 'auto_number') {
+      continue
+    }
+    if (field.field_type === 'checkbox') {
+      payload[field.field_key] = value === true
+      continue
+    }
+    if (field.field_type === 'multi_select') {
+      payload[field.field_key] = Array.isArray(value) ? value : []
+      continue
+    }
+    if (field.field_type === 'number' || field.field_type === 'currency') {
+      const text = typeof value === 'string' ? value.trim() : ''
+      if (!text) {
+        continue
+      }
+      payload[field.field_key] = Number(text)
+      continue
+    }
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (!text) {
+      continue
+    }
+    payload[field.field_key] = text
+  }
+  return payload
+}
+
+function filtersActive(query: RecordQuery): boolean {
+  return Boolean(query.q || query.formId || query.source || query.createdFrom || query.createdTo)
+}
+
+export function RecordsPanel({ tenantId }: { tenantId: string }) {
+  const { projectId, recordId } = useParams()
+  const location = useLocation()
+  const onNew = location.pathname.endsWith('/new')
+  const onEdit = Boolean(recordId) && location.pathname.endsWith('/edit')
+  const [projectAttempt, setProjectAttempt] = useState(0)
+  const [projects, setProjects] = useState<{ status: 'loading' | 'ready' | 'error'; items: Project[] }>({
+    status: 'loading',
+    items: [],
+  })
+
+  useEffect(() => {
+    if (projectId) {
+      return
+    }
+    let cancelled = false
+    setProjects({ status: 'loading', items: [] })
+    listProjects(tenantId, { q: '', status: '' })
+      .then((page) => {
+        if (!cancelled) {
+          setProjects({ status: 'ready', items: page.items })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjects({ status: 'error', items: [] })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, tenantId, projectAttempt])
+
+  if (!projectId) {
+    return (
+      <section className="stack" aria-labelledby="records-projects-heading">
+        <div className="page-header">
+          <div>
+            <h2 id="records-projects-heading">Records</h2>
+            <p className="page-intro">Choose a project, then work with its records.</p>
+          </div>
+        </div>
+        {projects.status === 'loading' ? <LoadingSkeleton /> : null}
+        {projects.status === 'error' ? (
+          <p role="alert" className="alert alert-error">
+            The projects could not be loaded.
+            <button type="button" onClick={() => setProjectAttempt((current) => current + 1)}>
+              Retry
+            </button>
+          </p>
+        ) : null}
+        {projects.status === 'ready' && projects.items.length === 0 ? (
+          <EmptyState title="No projects" message="Create a project before adding records." />
+        ) : null}
+        {projects.status === 'ready' && projects.items.length > 0 ? (
+          <ul className="project-list">
+            {projects.items.map((project) => (
+              <li key={project.id}>
+                <Link to={`/tenants/${tenantId}/records/${project.id}`}>{project.name}</Link>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    )
+  }
+
+  if (onNew) {
+    return <RecordEditor tenantId={tenantId} projectId={projectId} />
+  }
+  if (onEdit && recordId) {
+    return <RecordEditor tenantId={tenantId} projectId={projectId} recordId={recordId} />
+  }
+  if (recordId) {
+    return <RecordDetail tenantId={tenantId} projectId={projectId} recordId={recordId} />
+  }
+  return <RecordList tenantId={tenantId} projectId={projectId} />
+}
+
+function RecordList({ tenantId, projectId }: { tenantId: string; projectId: string }) {
+  const [project, setProject] = useState<Project | null>(null)
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [forms, setForms] = useState<FormDefinition[]>([])
+  const [page, setPage] = useState<{ status: 'loading' | 'ready' | 'error'; items: RecordListItem[]; total: number }>({
+    status: 'loading',
+    items: [],
+    total: 0,
+  })
+  const [draft, setDraft] = useState({ q: '', formId: '', source: '', createdFrom: '', createdTo: '' })
+  const [query, setQuery] = useState<RecordQuery>({
+    sort: 'created_at',
+    direction: 'desc',
+    limit: PAGE_SIZE,
+    offset: 0,
+  })
+  const [reload, setReload] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    getProject(tenantId, projectId)
+      .then((loaded) => {
+        if (!cancelled) {
+          setProject(loaded)
+          setProjectError(null)
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setProjectError(messageFrom(error))
+        }
+      })
+    listForms(tenantId, projectId)
+      .then((loaded) => {
+        if (!cancelled) {
+          setForms(loaded.items)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setForms([])
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, projectId])
+
+  useEffect(() => {
+    let cancelled = false
+    setPage((current) => ({ ...current, status: 'loading' }))
+    listRecords(tenantId, projectId, query)
+      .then((loaded) => {
+        if (!cancelled) {
+          setPage({ status: 'ready', items: loaded.items, total: loaded.total })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPage({ status: 'error', items: [], total: 0 })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, projectId, query, reload])
+
+  function onSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setQuery((current) => ({
+      ...current,
+      q: draft.q.trim(),
+      formId: draft.formId,
+      source: draft.source,
+      createdFrom: draft.createdFrom,
+      createdTo: draft.createdTo,
+      offset: 0,
+    }))
+  }
+
+  const archived = project?.status === 'archived'
+  const offset = query.offset ?? 0
+  const from = page.total === 0 ? 0 : offset + 1
+  const to = offset + page.items.length
+
+  return (
+    <section className="stack" aria-labelledby="record-list-heading">
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link to={`/tenants/${tenantId}/records`}>Records</Link>
+        <span aria-hidden="true">/</span>
+        <span>{project?.name ?? 'Project'}</span>
+      </nav>
+      <div className="page-header">
+        <div>
+          <h2 id="record-list-heading">{project?.name ?? 'Records'}</h2>
+          <p className="page-intro">Records in this project. Search runs on the server.</p>
+        </div>
+        {archived ? null : (
+          <Link className="button-link" to={`/tenants/${tenantId}/records/${projectId}/new`}>
+            New record
+          </Link>
+        )}
+      </div>
+      {projectError ? (
+        <p role="alert" className="alert alert-error">
+          {projectError}
+        </p>
+      ) : null}
+      {archived ? <p>This project is archived. Existing records can still be read.</p> : null}
+      <form className="stack" onSubmit={onSearch}>
+        <label>
+          Search records
+          <input value={draft.q} onChange={(event) => setDraft((current) => ({ ...current, q: event.target.value }))} />
+        </label>
+        <label>
+          Form
+          <select
+            value={draft.formId}
+            onChange={(event) => setDraft((current) => ({ ...current, formId: event.target.value }))}
+          >
+            <option value="">All forms</option>
+            {forms.map((form) => (
+              <option key={form.id} value={form.id}>
+                {form.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Source
+          <select
+            value={draft.source}
+            onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))}
+          >
+            <option value="">All sources</option>
+            {SOURCES.map((source) => (
+              <option key={source.value} value={source.value}>
+                {source.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Created from
+          <input
+            type="date"
+            value={draft.createdFrom}
+            onChange={(event) => setDraft((current) => ({ ...current, createdFrom: event.target.value }))}
+          />
+        </label>
+        <label>
+          Created to
+          <input
+            type="date"
+            value={draft.createdTo}
+            onChange={(event) => setDraft((current) => ({ ...current, createdTo: event.target.value }))}
+          />
+        </label>
+        <label>
+          Sort
+          <select
+            value={`${query.sort ?? 'created_at'}:${query.direction ?? 'desc'}`}
+            onChange={(event) => {
+              const [sort, direction] = event.target.value.split(':')
+              setQuery((current) => ({
+                ...current,
+                sort: sort as RecordQuery['sort'],
+                direction: direction as RecordQuery['direction'],
+                offset: 0,
+              }))
+            }}
+          >
+            <option value="created_at:desc">Newest</option>
+            <option value="created_at:asc">Oldest</option>
+            <option value="updated_at:desc">Recently updated</option>
+            <option value="public_number:asc">Record number</option>
+          </select>
+        </label>
+        <button type="submit">Search</button>
+      </form>
+      {page.status === 'loading' ? <LoadingSkeleton /> : null}
+      {page.status === 'error' ? (
+        <p role="alert" className="alert alert-error">
+          The records could not be loaded.
+          <button type="button" onClick={() => setReload((current) => current + 1)}>
+            Retry
+          </button>
+        </p>
+      ) : null}
+      {page.status === 'ready' && page.items.length === 0 ? (
+        <EmptyState
+          title={filtersActive(query) ? 'No matching records' : 'No records yet'}
+          message={
+            filtersActive(query)
+              ? 'Try a different search or clear the filters.'
+              : 'Create a record from a published form.'
+          }
+        />
+      ) : null}
+      {page.status === 'ready' && page.items.length > 0 ? (
+        <>
+          <p>
+            Showing {from}–{to} of {page.total}
+          </p>
+          <ul className="project-list">
+            {page.items.map((item) => (
+              <li key={item.id}>
+                <Link to={`/tenants/${tenantId}/records/${projectId}/${item.id}`}>
+                  <span className="card-title">{item.public_number}</span>
+                  <span>{item.display_name}</span>
+                  <span className="muted">
+                    {item.form_name} · version {item.version_number}
+                  </span>
+                  <span className="muted">Created {formatWhen(item.created_at)}</span>
+                  <span className="muted">Updated {formatWhen(item.updated_at)}</span>
+                  {item.summary.map((entry) => (
+                    <span key={entry.label}>
+                      {entry.label}: {entry.value}
+                    </span>
+                  ))}
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <div className="stack">
+            <button
+              type="button"
+              disabled={offset === 0}
+              onClick={() => setQuery((current) => ({ ...current, offset: Math.max(0, offset - PAGE_SIZE) }))}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={offset + PAGE_SIZE >= page.total}
+              onClick={() => setQuery((current) => ({ ...current, offset: offset + PAGE_SIZE }))}
+            >
+              Next
+            </button>
+          </div>
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; projectId: string; recordId: string }) {
+  const navigate = useNavigate()
+  const [project, setProject] = useState<Project | null>(null)
+  const [record, setRecord] = useState<CrmRecord | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [reload, setReload] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    Promise.all([getProject(tenantId, projectId), getRecord(tenantId, projectId, recordId)])
+      .then(([loadedProject, loadedRecord]) => {
+        if (!cancelled) {
+          setProject(loadedProject)
+          setRecord(loadedRecord)
+          setLoading(false)
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(messageFrom(caught))
+          setLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, projectId, recordId, reload])
+
+  async function onArchive() {
+    if (!record || submitting) {
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      await archiveRecord(tenantId, projectId, record.id, record.updated_at)
+      navigate(`/tenants/${tenantId}/records/${projectId}`)
+    } catch (caught) {
+      setError(messageFrom(caught))
+      setSubmitting(false)
+    }
+  }
+
+  const archived = project?.status === 'archived'
+  const absent = new Set(record?.absent_from_draft.map((item) => item.field_key) ?? [])
+
+  return (
+    <section className="stack" aria-labelledby="record-detail-heading">
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link to={`/tenants/${tenantId}/records`}>Records</Link>
+        <span aria-hidden="true">/</span>
+        <Link to={`/tenants/${tenantId}/records/${projectId}`}>{project?.name ?? 'Project'}</Link>
+        <span aria-hidden="true">/</span>
+        <span>{record?.public_number ?? 'Record'}</span>
+      </nav>
+      {loading ? <LoadingSkeleton /> : null}
+      {error ? (
+        <p role="alert" className="alert alert-error">
+          {error}{' '}
+          <button type="button" onClick={() => setReload((current) => current + 1)}>
+            Retry
+          </button>
+        </p>
+      ) : null}
+      {record ? (
+        <>
+          <div className="page-header">
+            <div>
+              <h2 id="record-detail-heading">{record.public_number}</h2>
+              <p className="page-intro">{record.display_name}</p>
+            </div>
+            {archived ? null : (
+              <Link className="button-link" to={`/tenants/${tenantId}/records/${projectId}/${record.id}/edit`}>
+                Edit record
+              </Link>
+            )}
+          </div>
+          <p>
+            Form {record.form_name}, version {record.version_number}. Form version {record.form_version_id}.
+          </p>
+          <p>Source {record.source_label}.</p>
+          <p>Created {formatWhen(record.created_at)}.</p>
+          <p>Updated {formatWhen(record.updated_at)}.</p>
+          {archived ? <p>This project is archived. This record can still be read.</p> : null}
+          {record.fields.map((field) => (
+            <div key={field.field_key}>
+              <p>
+                <strong>{field.label}</strong>
+              </p>
+              <p>{shownValue(field, record.values[field.field_key])}</p>
+              {absent.has(field.field_key) ? (
+                <p>This field is not in the current draft. This record still uses version {record.version_number}.</p>
+              ) : null}
+            </div>
+          ))}
+          {record.unmapped_values.length > 0 ? (
+            <div>
+              <h3>Stored values without a field in this version</h3>
+              {record.unmapped_values.map((item) => (
+                <p key={item.field_key}>
+                  {item.field_key}: {item.value === null ? 'Not entered' : String(item.value)}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {archived ? null : (
+            <button type="button" onClick={() => void onArchive()} disabled={submitting}>
+              {submitting ? 'Archiving record' : 'Archive record'}
+            </button>
+          )}
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+function RecordEditor({
+  tenantId,
+  projectId,
+  recordId,
+}: {
+  tenantId: string
+  projectId: string
+  recordId?: string
+}) {
+  const navigate = useNavigate()
+  const saving = useRef(false)
+  const [project, setProject] = useState<Project | null>(null)
+  const [forms, setForms] = useState<FormDefinition[]>([])
+  const [formId, setFormId] = useState('')
+  const [published, setPublished] = useState<FormVersion | null>(null)
+  const [record, setRecord] = useState<CrmRecord | null>(null)
+  const [source, setSource] = useState('manual')
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const requests: Promise<unknown>[] = [getProject(tenantId, projectId)]
+    if (recordId) {
+      requests.push(getRecord(tenantId, projectId, recordId))
+    } else {
+      requests.push(listForms(tenantId, projectId))
+    }
+    Promise.all(requests)
+      .then((loaded) => {
+        if (cancelled) {
+          return
+        }
+        setProject(loaded[0] as Project)
+        if (recordId) {
+          const existing = loaded[1] as CrmRecord
+          setRecord(existing)
+          setFormId(existing.form_id)
+          setSource(existing.source)
+        } else {
+          const published = ((loaded[1] as { items: FormDefinition[] }).items ?? []).filter(
+            (form) => form.current_published_version_id,
+          )
+          setForms(published)
+          setFormId(published[0]?.id ?? '')
+        }
+        setLoading(false)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(messageFrom(caught))
+          setLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, projectId, recordId])
+
+  const selected = forms.find((form) => form.id === formId) ?? null
+
+  useEffect(() => {
+    if (recordId || !selected?.current_published_version_id) {
+      return
+    }
+    let cancelled = false
+    setPublished(null)
+    getFormVersion(tenantId, projectId, selected.id, selected.current_published_version_id)
+      .then((version) => {
+        if (!cancelled) {
+          setPublished(version)
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(messageFrom(caught))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [recordId, selected, tenantId, projectId])
+
+  const fields = record?.fields ?? published?.fields ?? []
+  const versionNumber = record?.version_number ?? published?.version_number
+  const versionName = record?.form_name ?? published?.name ?? ''
+  const versionDescription = record?.form_description ?? published?.description ?? ''
+  const archived = project?.status === 'archived'
+
+  async function onSave(values: Record<string, FormValue>) {
+    if (saving.current || archived) {
+      return
+    }
+    saving.current = true
+    setSubmitting(true)
+    setError(null)
+    setFieldErrors({})
+    try {
+      const payload = payloadValues(fields, values)
+      const saved = record
+        ? await updateRecord(tenantId, projectId, record.id, {
+            expected_updated_at: record.updated_at,
+            values: payload,
+          })
+        : await createRecord(tenantId, projectId, { form_id: formId, source, values: payload })
+      navigate(`/tenants/${tenantId}/records/${projectId}/${saved.id}`)
+    } catch (caught) {
+      setError(messageFrom(caught))
+      setFieldErrors(fieldsFrom(caught))
+      setSubmitting(false)
+      saving.current = false
+    }
+  }
+
+  return (
+    <section className="stack" aria-labelledby="record-editor-heading">
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link to={`/tenants/${tenantId}/records`}>Records</Link>
+        <span aria-hidden="true">/</span>
+        <Link to={`/tenants/${tenantId}/records/${projectId}`}>{project?.name ?? 'Project'}</Link>
+        <span aria-hidden="true">/</span>
+        <span>{record ? record.public_number : 'New record'}</span>
+      </nav>
+      <h2 id="record-editor-heading">{record ? `Edit ${record.public_number}` : 'New record'}</h2>
+      {loading ? <LoadingSkeleton /> : null}
+      {error ? (
+        <p role="alert" className="alert alert-error">
+          {error}
+        </p>
+      ) : null}
+      {archived ? <p>This project is archived. Records cannot be changed.</p> : null}
+      {!loading && !record && forms.length === 0 ? (
+        <EmptyState title="No published form" message="Publish a form in this project before adding a record." />
+      ) : null}
+      {!loading && !archived && !record && forms.length > 0 ? (
+        <>
+          <label>
+            Form
+            <select value={formId} onChange={(event) => setFormId(event.target.value)}>
+              {forms.map((form) => (
+                <option key={form.id} value={form.id}>
+                  {form.name} · version {form.current_published_version_number}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Source
+            <select value={source} onChange={(event) => setSource(event.target.value)}>
+              {SOURCES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : null}
+      {!loading && !archived && fields.length > 0 && (record || published) ? (
+        <FormRenderer
+          key={record ? record.form_version_id : published?.id}
+          name={versionName}
+          description={versionDescription}
+          fields={fields}
+          mode="record"
+          versionNumber={versionNumber ?? undefined}
+          initialValues={record ? formValues(record.fields, record.values) : undefined}
+          externalErrors={fieldErrors}
+          submitting={submitting}
+          onSave={onSave}
+        />
+      ) : null}
+    </section>
+  )
+}

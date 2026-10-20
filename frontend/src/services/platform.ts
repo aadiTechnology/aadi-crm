@@ -7,11 +7,13 @@ export const PROJECT_MANAGE_PERMISSION = 'crm.project_management.manage'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly fields: Record<string, string>
 
-  constructor(status: number, message?: string) {
+  constructor(status: number, message?: string, fields?: Record<string, string>) {
     super(message ?? `Request failed with status ${status}`)
     this.name = 'ApiError'
     this.status = status
+    this.fields = fields ?? {}
   }
 }
 
@@ -141,15 +143,17 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
   })
   if (!response.ok) {
     let message = accessMessage(response.status)
+    let fields: Record<string, string> = {}
     try {
-      const body = (await response.json()) as { error?: { message?: string } }
+      const body = (await response.json()) as { error?: { message?: string; fields?: unknown } }
       if (typeof body.error?.message === 'string' && body.error.message.trim()) {
         message = body.error.message
       }
+      fields = readErrorFields(body.error?.fields)
     } catch {
       // Keep the status message when the body is empty or not JSON.
     }
-    throw new ApiError(response.status, message)
+    throw new ApiError(response.status, message, fields)
   }
   if (response.status === 204) {
     return undefined as T
@@ -220,6 +224,19 @@ export function getLeads(tenantId: string): Promise<LeadsStub> {
 function projectPath(tenantId: string, projectId?: string): string {
   const base = `/api/v1/tenants/${tenantId}/projects`
   return projectId ? `${base}/${projectId}` : base
+}
+
+function readErrorFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object') {
+    return {}
+  }
+  const fields: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === 'string') {
+      fields[key] = item
+    }
+  }
+  return fields
 }
 
 function mutationHeaders(): Headers {
@@ -553,5 +570,147 @@ export function replaceDraftFromPublished(
   return request(crmUrl(), `${formCollectionPath(tenantId, projectId)}/${formId}/draft`, {
     method: 'POST',
     headers: mutationHeaders(),
+  })
+}
+
+export type RecordSummaryValue = {
+  label: string
+  value: string
+}
+
+export type RecordListItem = {
+  id: string
+  public_number: string
+  form_id: string
+  form_name: string
+  form_version_id: string
+  version_number: number
+  display_name: string
+  source: string
+  source_label: string
+  created_at: string
+  updated_at: string
+  summary: RecordSummaryValue[]
+}
+
+export type RecordPage = {
+  items: RecordListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type RecordValue = string | number | boolean | string[] | null
+
+export type CrmRecord = {
+  id: string
+  project_id: string
+  form_id: string
+  form_version_id: string
+  version_number: number
+  form_name: string
+  form_description: string
+  public_number: string
+  display_name: string
+  source: string
+  source_label: string
+  created_at: string
+  updated_at: string
+  captured_at: string
+  fields: RenderField[]
+  values: Record<string, RecordValue>
+  absent_from_draft: { field_key: string; label: string }[]
+  unmapped_values: { field_key: string; value: RecordValue }[]
+}
+
+export type RecordQuery = {
+  q?: string
+  formId?: string
+  source?: string
+  createdFrom?: string
+  createdTo?: string
+  sort?: 'created_at' | 'updated_at' | 'public_number'
+  direction?: 'asc' | 'desc'
+  limit?: number
+  offset?: number
+}
+
+function recordPath(tenantId: string, projectId: string, recordId?: string): string {
+  const base = `${projectPath(tenantId, projectId)}/records`
+  return recordId ? `${base}/${recordId}` : base
+}
+
+export function listRecords(tenantId: string, projectId: string, query: RecordQuery = {}): Promise<RecordPage> {
+  const params = new URLSearchParams()
+  if (query.q) {
+    params.set('q', query.q)
+  }
+  if (query.formId) {
+    params.set('form_id', query.formId)
+  }
+  if (query.source) {
+    params.set('source', query.source)
+  }
+  if (query.createdFrom) {
+    params.set('created_from', query.createdFrom)
+  }
+  if (query.createdTo) {
+    params.set('created_to', query.createdTo)
+  }
+  if (query.sort) {
+    params.set('sort', query.sort)
+  }
+  if (query.direction) {
+    params.set('direction', query.direction)
+  }
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.offset !== undefined) {
+    params.set('offset', String(query.offset))
+  }
+  const search = params.toString()
+  return request(crmUrl(), `${recordPath(tenantId, projectId)}${search ? `?${search}` : ''}`)
+}
+
+export function createRecord(
+  tenantId: string,
+  projectId: string,
+  input: { form_id: string; source: string; values: Record<string, RecordValue> },
+): Promise<CrmRecord> {
+  return request(crmUrl(), recordPath(tenantId, projectId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function getRecord(tenantId: string, projectId: string, recordId: string): Promise<CrmRecord> {
+  return request(crmUrl(), recordPath(tenantId, projectId, recordId))
+}
+
+export function updateRecord(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  input: { expected_updated_at: string; values: Record<string, RecordValue> },
+): Promise<CrmRecord> {
+  return request(crmUrl(), recordPath(tenantId, projectId, recordId), {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function archiveRecord(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  expectedUpdatedAt: string,
+): Promise<{ id: string; archived: boolean }> {
+  return request(crmUrl(), `${recordPath(tenantId, projectId, recordId)}/archive`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ expected_updated_at: expectedUpdatedAt }),
   })
 }

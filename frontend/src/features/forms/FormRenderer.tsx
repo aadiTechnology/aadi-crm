@@ -2,7 +2,9 @@ import { useState, type FormEvent } from 'react'
 
 import type { RenderField } from '@/services/platform'
 
-type Value = string | boolean | string[]
+export type FormValue = string | boolean | string[]
+
+type Value = FormValue
 
 const PICKLIST = new Set(['dropdown', 'multi_select', 'radio'])
 
@@ -232,26 +234,43 @@ export function FormRenderer({
   fields,
   mode,
   versionNumber,
+  initialValues,
+  externalErrors,
+  submitting = false,
+  onSave,
 }: {
   name: string
   description: string
   fields: RenderField[]
-  mode: 'preview' | 'published'
+  mode: 'preview' | 'published' | 'record'
   versionNumber?: number
+  initialValues?: Record<string, Value>
+  externalErrors?: Record<string, string>
+  submitting?: boolean
+  onSave?: (values: Record<string, Value>) => Promise<void> | void
 }) {
   const [values, setValues] = useState<Record<string, Value>>(() =>
-    Object.fromEntries(fields.map((field) => [field.field_key, initialValue(field)])),
+    Object.fromEntries(
+      fields.map((field) => [field.field_key, initialValues?.[field.field_key] ?? initialValue(field)]),
+    ),
   )
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notice, setNotice] = useState<string | null>(null)
   let previousSection: string | null = null
 
-  function onCheck(event: FormEvent<HTMLFormElement>) {
+  async function onCheck(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (submitting) {
+      return
+    }
     const next = validate(fields, values)
     setErrors(next)
     if (Object.keys(next).length > 0) {
       setNotice(null)
+      return
+    }
+    if (mode === 'record' && onSave) {
+      await onSave(values)
       return
     }
     setNotice(
@@ -262,10 +281,12 @@ export function FormRenderer({
   }
 
   return (
-    <form className="stack form-render" onSubmit={onCheck} noValidate>
+    <form className="stack form-render" onSubmit={(event) => void onCheck(event)} noValidate>
       <h3>{name}</h3>
       {mode === 'preview' ? (
         <p>Draft preview. Required fields are marked. Nothing is saved.</p>
+      ) : mode === 'record' ? (
+        <p>Published version {versionNumber}. Saving uses this version, not the current draft.</p>
       ) : (
         <p>Published version {versionNumber}. This schema stays as it was published.</p>
       )}
@@ -290,9 +311,9 @@ export function FormRenderer({
             {PICKLIST.has(field.field_type) && field.field_type === 'dropdown' && field.options ? (
               <p>{field.options.map((option) => option.label).join(', ')}</p>
             ) : null}
-            {errors[field.field_key] ? (
+            {errors[field.field_key] || externalErrors?.[field.field_key] ? (
               <p role="alert" className="alert alert-error">
-                {errors[field.field_key]}
+                {errors[field.field_key] || externalErrors?.[field.field_key]}
               </p>
             ) : null}
           </div>
@@ -304,7 +325,9 @@ export function FormRenderer({
         </p>
       ) : null}
       {fields.length > 0 ? (
-        <button type="submit">{mode === 'preview' ? 'Check preview' : 'Check published form'}</button>
+        <button type="submit" disabled={submitting}>
+          {mode === 'record' ? (submitting ? 'Saving record' : 'Save record') : mode === 'preview' ? 'Check preview' : 'Check published form'}
+        </button>
       ) : null}
     </form>
   )

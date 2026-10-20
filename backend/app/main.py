@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.forms import router as forms_router
 from app.api.projects import router as projects_router
+from app.api.records import router as records_router
 from app.api.shell import router as shell_router
 
 _ORIGINS = [
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     application.include_router(shell_router)
     application.include_router(projects_router)
     application.include_router(forms_router)
+    application.include_router(records_router)
     return application
 
 

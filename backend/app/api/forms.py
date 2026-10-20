@@ -32,6 +32,7 @@ from app.forms_store import (
     update_form,
 )
 from app.platform_client import PlatformClient
+from app.records_store import field_has_saved_values
 
 router = APIRouter(prefix="/api/v1", tags=["forms"])
 
@@ -614,6 +615,14 @@ def post_remove_field(
     )
     if isinstance(opened, JSONResponse):
         return opened
+    if field_has_saved_values(
+        connection,
+        tenant_id=str(tenant_id),
+        project_id=str(project_id),
+        form_id=str(form_id),
+        field_id=str(field_id),
+    ):
+        return _error(409, "This field has saved record values and cannot be removed.")
     updated = remove_field(
         connection,
         tenant_id=str(tenant_id),
