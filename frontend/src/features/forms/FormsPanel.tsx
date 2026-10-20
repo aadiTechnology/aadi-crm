@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { FormRenderer } from '@/features/forms/FormRenderer'
+import { EmptyState, LoadingSkeleton, StatusBadge } from '@/ui/chrome'
 import {
   addFormField,
   ApiError,
@@ -48,6 +49,18 @@ const FIELD_TYPES: { value: FormFieldType; label: string }[] = [
 
 const PICKLIST = new Set<FormFieldType>(['dropdown', 'multi_select', 'radio'])
 const NO_DEFAULT = new Set<FormFieldType>(['multi_select', 'file', 'auto_number'])
+
+const PALETTE: { title: string; hint?: string; types: FormFieldType[] }[] = [
+  { title: 'Text', types: ['text', 'long_text'] },
+  { title: 'Contact', types: ['mobile', 'email', 'url'] },
+  { title: 'Value', types: ['number', 'currency', 'date', 'time'] },
+  { title: 'Choice', types: ['dropdown', 'multi_select', 'radio', 'checkbox'] },
+  {
+    title: 'Definition only',
+    hint: 'File and auto-number can be configured. They do not upload a file or generate a number.',
+    types: ['file', 'auto_number'],
+  },
+]
 
 type Draft = {
   field_key: string
@@ -108,6 +121,42 @@ function messageFrom(error: unknown): string {
 
 function typeLabel(fieldType: FormFieldType): string {
   return FIELD_TYPES.find((item) => item.value === fieldType)?.label ?? fieldType
+}
+
+function FieldPalette({
+  selected,
+  disabled,
+  onPick,
+}: {
+  selected: FormFieldType
+  disabled: boolean
+  onPick: (fieldType: FormFieldType) => void
+}) {
+  return (
+    <aside className="palette" aria-label="Field palette">
+      <h3>Field palette</h3>
+      <p className="muted">Choose a type, then set its properties.</p>
+      {PALETTE.map((group) => (
+        <div key={group.title} className="palette-group">
+          <p className="palette-label">{group.title}</p>
+          {group.hint ? <p className="muted">{group.hint}</p> : null}
+          <div className="palette-items">
+            {group.types.map((fieldType) => (
+              <button
+                key={fieldType}
+                type="button"
+                aria-pressed={!disabled && selected === fieldType}
+                disabled={disabled}
+                onClick={() => onPick(fieldType)}
+              >
+                {typeLabel(fieldType)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </aside>
+  )
 }
 
 function emptyDraft(): Draft {
@@ -306,14 +355,14 @@ function FieldEditor({
   const showLength = draft.field_type === 'text' || draft.field_type === 'long_text'
   const showRange = draft.field_type === 'number' || draft.field_type === 'currency'
   return (
-    <form className="stack" onSubmit={onSubmit} noValidate>
+    <form className="stack field-form" onSubmit={onSubmit} noValidate>
       <h3>{creating ? 'Add field' : 'Edit field'}</h3>
-      <label>
+      <label className="required-field">
         Field label
         <input value={draft.label} onChange={(event) => onChange({ ...draft, label: event.target.value })} />
       </label>
       {creating ? (
-        <label>
+        <label className="required-field">
           Field identifier
           <input
             value={draft.field_key}
@@ -325,6 +374,7 @@ function FieldEditor({
           Field identifier <strong>{draft.field_key}</strong>
         </p>
       )}
+      {creating ? <p className="muted">The identifier cannot be changed after the field is saved.</p> : null}
       <label>
         Field type
         <select
@@ -388,16 +438,23 @@ function FieldEditor({
         </label>
       ) : null}
       {PICKLIST.has(draft.field_type) ? (
-        <label>
-          Options
-          <textarea
-            value={draft.options_text}
-            onChange={(event) => onChange({ ...draft, options_text: event.target.value })}
-          />
-        </label>
+        <>
+          <label>
+            Options
+            <textarea
+              aria-describedby="option-hint"
+              value={draft.options_text}
+              onChange={(event) => onChange({ ...draft, options_text: event.target.value })}
+            />
+          </label>
+          <p className="muted" id="option-hint">
+            One option per line, written as value|label.
+          </p>
+        </>
       ) : null}
       {draft.field_type === 'file' ? (
         <>
+          <p className="muted">This stores the file field definition. Upload is not available.</p>
           <label>
             Maximum file size (MB)
             <input
@@ -416,6 +473,7 @@ function FieldEditor({
       ) : null}
       {draft.field_type === 'auto_number' ? (
         <>
+          <p className="muted">This stores the auto-number definition. A number is not generated.</p>
           <label>
             Prefix
             <input value={draft.prefix} onChange={(event) => onChange({ ...draft, prefix: event.target.value })} />
@@ -463,7 +521,7 @@ function FieldEditor({
           {submitting ? 'Saving field' : creating ? 'Add field' : 'Save field'}
         </button>
         {onCancel ? (
-          <button type="button" onClick={onCancel}>
+          <button type="button" className="button-secondary" onClick={onCancel}>
             Cancel edit
           </button>
         ) : null}
@@ -492,6 +550,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
   const [versionError, setVersionError] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewState>({ status: 'loading' })
   const [published, setPublished] = useState<PublishedState>({ status: 'loading' })
+  const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
     setSubmitting(false)
@@ -500,6 +559,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     setVersionError(null)
     setEditingId(null)
     setDraft(emptyDraft())
+    setNotice(null)
   }, [location.pathname])
 
   useEffect(() => {
@@ -705,6 +765,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
       setDetail((current) => (current.status === 'ready' ? { ...current, form: updated } : current))
       setName(updated.name)
       setDescription(updated.description)
+      setNotice('Form details saved.')
       setSubmitting(false)
     } catch (error) {
       setFormError(messageFrom(error))
@@ -732,6 +793,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
       setDetail({ ...detail, form: updated })
       setDraft(emptyDraft())
       setEditingId(null)
+      setNotice('Field saved.')
       setSubmitting(false)
     } catch (error) {
       setFieldError(messageFrom(error))
@@ -792,6 +854,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     try {
       await publishForm(tenantId, projectId, formId)
       await reloadDetail()
+      setNotice('Version published.')
       setSubmitting(false)
     } catch (error) {
       setVersionError(messageFrom(error))
@@ -810,6 +873,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
       await reloadDetail()
       setEditingId(null)
       setDraft(emptyDraft())
+      setNotice('Draft replaced from the published version.')
       setSubmitting(false)
     } catch (error) {
       setVersionError(messageFrom(error))
@@ -830,6 +894,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
         setEditingId(null)
         setDraft(emptyDraft())
       }
+      setNotice('Field removed.')
       setSubmitting(false)
     } catch (error) {
       setFieldError(messageFrom(error))
@@ -841,14 +906,21 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
     return (
       <section className="stack" aria-labelledby="forms-heading">
         <h2 id="forms-heading">Forms</h2>
-        <p className="muted">Form definitions belong to one project.</p>
-        {projects.status === 'loading' ? <p role="status">Loading forms</p> : null}
+        <p className="page-intro">Form definitions belong to one project.</p>
+        {projects.status === 'loading' ? (
+          <>
+            <p role="status">Loading forms</p>
+            <LoadingSkeleton />
+          </>
+        ) : null}
         {projects.status === 'error' ? (
           <p role="alert" className="alert alert-error">
             {projects.message}
           </p>
         ) : null}
-        {projects.status === 'ready' && projects.items.length === 0 ? <p>No projects are available.</p> : null}
+        {projects.status === 'ready' && projects.items.length === 0 ? (
+          <EmptyState title="No projects" message="No projects are available." />
+        ) : null}
         {projects.status === 'ready' && projects.items.length > 0 ? (
           <ul className="project-list">
             {projects.items.map((project) => (
@@ -879,8 +951,14 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
         {forms.status === 'ready' && forms.project.status === 'archived' ? (
           <p>This project is archived. A project manager can still change its form definitions.</p>
         ) : null}
-        {canManage ? <Link to={`/tenants/${tenantId}/forms/${projectId}/new`}>New form</Link> : null}
-        {forms.status === 'ready' && forms.items.length === 0 ? <p>No form definitions yet.</p> : null}
+        {canManage ? (
+          <Link className="button-link" to={`/tenants/${tenantId}/forms/${projectId}/new`}>
+            New form
+          </Link>
+        ) : null}
+        {forms.status === 'ready' && forms.items.length === 0 ? (
+          <EmptyState title="No forms" message="No form definitions yet." />
+        ) : null}
         {forms.status === 'ready' && forms.items.length > 0 ? (
           <ul className="project-list">
             {forms.items.map((form) => (
@@ -920,8 +998,8 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
           </p>
         ) : null}
         {detail.status === 'ready' && !denied ? (
-          <form className="stack" onSubmit={(event) => void onCreate(event)} noValidate>
-            <label>
+          <form className="panel stack" onSubmit={(event) => void onCreate(event)} noValidate>
+            <label className="required-field">
               Form name
               <input value={name} onChange={(event) => setName(event.target.value)} />
             </label>
@@ -992,13 +1070,41 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
 
   const canManage = detail.status === 'ready' && detail.project.access.can_manage_forms
   const fields = detail.status === 'ready' ? detail.form.fields : []
+  const formDirty =
+    detail.status === 'ready' && (name !== detail.form.name || description !== detail.form.description)
   let previousSection: string | null = null
+
+  function selectField(field: FormField) {
+    setEditingId(field.id)
+    setDraft(draftFromField(field))
+    setFieldError(null)
+  }
 
   return (
     <section className="stack" aria-labelledby="form-detail-heading">
-      <Link to={`/tenants/${tenantId}/forms/${projectId}`}>Back to forms</Link>
-      <h2 id="form-detail-heading">{detail.status === 'ready' ? detail.form.name : 'Form'}</h2>
-      {detail.status === 'loading' ? <p role="status">Loading form</p> : null}
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link to={`/tenants/${tenantId}/forms`}>Forms</Link>
+        <span aria-hidden="true">/</span>
+        <Link to={`/tenants/${tenantId}/forms/${projectId}`}>
+          {detail.status === 'ready' ? detail.project.name : 'Project'}
+        </Link>
+        <span aria-hidden="true">/</span>
+        <span>{detail.status === 'ready' ? detail.form.name : 'Form'}</span>
+      </nav>
+      <div className="page-header">
+        <div>
+          <h2 id="form-detail-heading">{detail.status === 'ready' ? detail.form.name : 'Form'}</h2>
+          <p className="page-intro">
+            <Link to={`/tenants/${tenantId}/forms/${projectId}`}>Back to forms</Link>
+          </p>
+        </div>
+      </div>
+      {detail.status === 'loading' ? (
+        <>
+          <p role="status">Loading form</p>
+          <LoadingSkeleton />
+        </>
+      ) : null}
       {detail.status === 'error' ? (
         <p role="alert" className="alert alert-error">
           {detail.message}
@@ -1007,13 +1113,19 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
       {detail.status === 'ready' ? (
         <>
           <p>
-            Status <strong>Draft</strong>
+            Status <StatusBadge tone="info">Draft</StatusBadge>
           </p>
           <p>
             {detail.form.current_published_version_number
               ? `Current published version ${detail.form.current_published_version_number}`
               : 'No published version yet.'}
           </p>
+          {formDirty ? <p className="muted">Unsaved form details</p> : null}
+          {notice ? (
+            <p role="status" className="alert alert-ok">
+              {notice}
+            </p>
+          ) : null}
           {canManage ? (
             <div className="row-actions">
               <Link className="button-link" to={`/tenants/${tenantId}/forms/${projectId}/${formId}/preview`}>
@@ -1023,7 +1135,7 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
                 {submitting ? 'Publishing' : 'Publish version'}
               </button>
               {detail.form.current_published_version_id ? (
-                <button type="button" disabled={submitting} onClick={() => void onReplaceDraft()}>
+                <button type="button" className="button-secondary" disabled={submitting} onClick={() => void onReplaceDraft()}>
                   Replace draft with published version
                 </button>
               ) : null}
@@ -1034,32 +1146,39 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
               {versionError}
             </p>
           ) : null}
-          <h3>Published versions</h3>
-          {versions.status === 'loading' ? <p role="status">Loading versions</p> : null}
-          {versions.status === 'error' ? (
-            <p role="alert" className="alert alert-error">
-              {versions.message}
-            </p>
-          ) : null}
-          {versions.status === 'ready' && versions.items.length === 0 ? <p>No versions have been published.</p> : null}
-          {versions.status === 'ready' && versions.items.length > 0 ? (
-            <ul className="project-list">
-              {versions.items.map((version) => (
-                <li key={version.id}>
-                  <Link to={`/tenants/${tenantId}/forms/${projectId}/${formId}/versions/${version.id}`}>
-                    <span>Render version {version.version_number}</span>
-                    <span className="muted">{version.current ? 'Current' : 'Published'}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          <section className="panel stack">
+            <h3>Published versions</h3>
+            {versions.status === 'loading' ? (
+              <>
+                <p role="status">Loading versions</p>
+                <LoadingSkeleton />
+              </>
+            ) : null}
+            {versions.status === 'error' ? (
+              <p role="alert" className="alert alert-error">
+                {versions.message}
+              </p>
+            ) : null}
+            {versions.status === 'ready' && versions.items.length === 0 ? <p>No versions have been published.</p> : null}
+            {versions.status === 'ready' && versions.items.length > 0 ? (
+              <ul className="project-list">
+                {versions.items.map((version) => (
+                  <li key={version.id}>
+                    <Link to={`/tenants/${tenantId}/forms/${projectId}/${formId}/versions/${version.id}`}>
+                      <span>Render version {version.version_number}</span>
+                      <span className="muted">{version.current ? 'Current' : 'Published'}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
           {detail.project.status === 'archived' ? (
             <p>This project is archived. A project manager can still change its form definitions.</p>
           ) : null}
           {canManage ? (
-            <form className="stack" onSubmit={(event) => void onSaveForm(event)} noValidate>
-              <label>
+            <form className="panel stack" onSubmit={(event) => void onSaveForm(event)} noValidate>
+              <label className="required-field">
                 Form name
                 <input value={name} onChange={(event) => setName(event.target.value)} />
               </label>
@@ -1079,78 +1198,113 @@ export function FormsPanel({ tenantId }: { tenantId: string }) {
           ) : (
             <p>{detail.form.description || 'No description.'}</p>
           )}
-          <h3>Fields</h3>
-          {fields.length === 0 ? <p>No fields yet.</p> : null}
-          {fields.length > 0 ? (
-            <ol className="member-list">
-              {fields.map((field, index) => {
-                const section = field.section_name || 'General'
-                const showSection = section !== previousSection
-                previousSection = section
-                return (
-                  <li key={field.id}>
-                    {showSection ? <p>Section {section}</p> : null}
-                    <p>
-                      <strong>{field.label}</strong> {field.required ? 'Required' : 'Optional'}
-                    </p>
-                    <p className="muted">
-                      {field.field_key} · {typeLabel(field.field_type)}
-                    </p>
-                    {field.help_text ? <p>{field.help_text}</p> : null}
-                    {field.options && field.options.length > 0 ? (
-                      <p>{field.options.map((option) => option.label).join(', ')}</p>
-                    ) : null}
-                    {canManage ? (
-                      <div className="row-actions">
-                        <button type="button" disabled={submitting || index === 0} onClick={() => void onReorder(field, -1)}>
-                          Move {field.label} up
-                        </button>
-                        <button
-                          type="button"
-                          disabled={submitting || index === fields.length - 1}
-                          onClick={() => void onReorder(field, 1)}
-                        >
-                          Move {field.label} down
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingId(field.id)
-                            setDraft(draftFromField(field))
-                            setFieldError(null)
-                          }}
-                        >
-                          Edit {field.label}
-                        </button>
-                        <button type="button" disabled={submitting} onClick={() => void onRemove(field)}>
-                          Remove {field.label}
-                        </button>
-                      </div>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ol>
-          ) : null}
-          {canManage ? (
-            <FieldEditor
-              draft={draft}
-              creating={editingId === null}
-              submitting={submitting}
-              error={fieldError}
-              onChange={setDraft}
-              onSubmit={(event) => void onSaveField(event)}
-              onCancel={
-                editingId
-                  ? () => {
-                      setEditingId(null)
-                      setDraft(emptyDraft())
-                      setFieldError(null)
-                    }
-                  : undefined
-              }
-            />
-          ) : null}
+          <div className="builder">
+            {canManage ? (
+              <FieldPalette
+                selected={draft.field_type}
+                disabled={editingId !== null || submitting}
+                onPick={(fieldType) => setDraft((current) => ({ ...current, field_type: fieldType }))}
+              />
+            ) : null}
+            <div className="canvas">
+              <h3>Form canvas</h3>
+              {detail.form.description ? <p className="muted">{detail.form.description}</p> : null}
+              {fields.length === 0 ? <EmptyState title="No fields" message="No fields yet." /> : null}
+              {fields.length > 0 ? (
+                <ol className="field-list">
+                  {fields.map((field, index) => {
+                    const section = field.section_name || 'General'
+                    const showSection = section !== previousSection
+                    previousSection = section
+                    const selected = editingId === field.id
+                    return (
+                      <li
+                        key={field.id}
+                        className={[
+                          selected ? 'is-selected' : '',
+                          field.required ? 'is-required' : '',
+                          selected && fieldError ? 'is-invalid' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onClick={(event) => {
+                          const target = event.target
+                          if (!canManage || (target instanceof Element && target.closest('button'))) {
+                            return
+                          }
+                          selectField(field)
+                        }}
+                      >
+                        {showSection ? <p>Section {section}</p> : null}
+                        <p>
+                          <strong>{field.label}</strong> {field.required ? 'Required' : 'Optional'}
+                        </p>
+                        <p className="muted">
+                          {field.field_key} · {typeLabel(field.field_type)}
+                        </p>
+                        {field.help_text ? <p>{field.help_text}</p> : null}
+                        {field.options && field.options.length > 0 ? (
+                          <p>{field.options.map((option) => option.label).join(', ')}</p>
+                        ) : null}
+                        {canManage ? (
+                          <div className="row-actions">
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              disabled={submitting || index === 0}
+                              onClick={() => void onReorder(field, -1)}
+                            >
+                              Move {field.label} up
+                            </button>
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              disabled={submitting || index === fields.length - 1}
+                              onClick={() => void onReorder(field, 1)}
+                            >
+                              Move {field.label} down
+                            </button>
+                            <button type="button" className="button-secondary" onClick={() => selectField(field)}>
+                              Edit {field.label}
+                            </button>
+                            <button
+                              type="button"
+                              className="button-danger"
+                              disabled={submitting}
+                              onClick={() => void onRemove(field)}
+                            >
+                              Remove {field.label}
+                            </button>
+                          </div>
+                        ) : null}
+                      </li>
+                    )
+                  })}
+                </ol>
+              ) : null}
+            </div>
+            {canManage ? (
+              <aside className={fieldError ? 'properties is-invalid' : 'properties'} aria-label="Field properties">
+                <FieldEditor
+                  draft={draft}
+                  creating={editingId === null}
+                  submitting={submitting}
+                  error={fieldError}
+                  onChange={setDraft}
+                  onSubmit={(event) => void onSaveField(event)}
+                  onCancel={
+                    editingId
+                      ? () => {
+                          setEditingId(null)
+                          setDraft(emptyDraft())
+                          setFieldError(null)
+                        }
+                      : undefined
+                  }
+                />
+              </aside>
+            ) : null}
+          </div>
         </>
       ) : null}
     </section>

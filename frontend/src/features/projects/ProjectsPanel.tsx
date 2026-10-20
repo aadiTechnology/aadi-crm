@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
+import { EmptyState, LoadingSkeleton, StatusBadge } from '@/ui/chrome'
 import {
   addProjectMember,
   ApiError,
@@ -331,13 +332,23 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
   if (onNew) {
     return (
       <section className="stack" aria-labelledby="project-create-heading">
-        <h2 id="project-create-heading">New project</h2>
-        <form className="stack" onSubmit={(event) => void onCreate(event)} noValidate>
-          <label>
+        <nav className="crumbs" aria-label="Breadcrumb">
+          <Link to={`/tenants/${tenantId}/projects`}>Projects</Link>
+          <span aria-hidden="true">/</span>
+          <span>New project</span>
+        </nav>
+        <div className="page-header">
+          <div>
+            <h2 id="project-create-heading">New project</h2>
+            <p className="page-intro">Create a project inside this organization.</p>
+          </div>
+        </div>
+        <form className="panel stack" onSubmit={(event) => void onCreate(event)} noValidate>
+          <label className="required-field">
             Project code
             <input name="code" value={code} onChange={(event) => setCode(event.target.value)} />
           </label>
-          <label>
+          <label className="required-field">
             Project name
             <input name="name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
           </label>
@@ -370,9 +381,30 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
     const canManageMembers = detail.status === 'ready' && detail.project.access.can_manage_members
     return (
       <section className="stack" aria-labelledby="project-detail-heading">
-        <Link to={`/tenants/${tenantId}/projects`}>Back to projects</Link>
-        <h2 id="project-detail-heading">{detail.status === 'ready' ? detail.project.name : 'Project'}</h2>
-        {detail.status === 'loading' ? <p role="status">Loading project</p> : null}
+        <nav className="crumbs" aria-label="Breadcrumb">
+          <Link to={`/tenants/${tenantId}/projects`}>Projects</Link>
+          <span aria-hidden="true">/</span>
+          <span>{detail.status === 'ready' ? detail.project.name : 'Project'}</span>
+        </nav>
+        <div className="page-header">
+          <div>
+            <h2 id="project-detail-heading">{detail.status === 'ready' ? detail.project.name : 'Project'}</h2>
+            <p className="page-intro">
+              <Link to={`/tenants/${tenantId}/projects`}>Back to projects</Link>
+            </p>
+          </div>
+          {detail.status === 'ready' ? (
+            <StatusBadge tone={detail.project.status === 'archived' ? 'warn' : 'ok'}>
+              {detail.project.status === 'archived' ? 'Archived' : 'Active'}
+            </StatusBadge>
+          ) : null}
+        </div>
+        {detail.status === 'loading' ? (
+          <>
+            <p role="status">Loading project</p>
+            <LoadingSkeleton />
+          </>
+        ) : null}
         {detail.status === 'error' ? (
           <p role="alert" className="alert alert-error">
             {detail.message}
@@ -380,35 +412,36 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
         ) : null}
         {detail.status === 'ready' ? (
           <>
-            <p>
-              Code <strong>{detail.project.code}</strong>
-            </p>
-            <p>
-              Status <strong>{detail.project.status === 'archived' ? 'Archived' : 'Active'}</strong>
-            </p>
-            <p>
-              Your role{' '}
-              <strong>
-                {detail.project.access.role
-                  ? roleLabel(detail.project.access.role)
-                  : canManageProject
-                    ? 'Project administrator'
-                    : 'No project role'}
-              </strong>
-            </p>
-            {detail.project.access.record_scope ? (
-              <p>
-                Record scope <strong>{scopeLabel(detail.project.access.record_scope)}</strong>
-              </p>
-            ) : null}
+            <dl className="meta-grid">
+              <div>
+                <dt>Code</dt>
+                <dd>{detail.project.code}</dd>
+              </div>
+              <div>
+                <dt>Your role</dt>
+                <dd>
+                  {detail.project.access.role
+                    ? roleLabel(detail.project.access.role)
+                    : canManageProject
+                      ? 'Project administrator'
+                      : 'No project role'}
+                </dd>
+              </div>
+              {detail.project.access.record_scope ? (
+                <div>
+                  <dt>Record scope</dt>
+                  <dd>{scopeLabel(detail.project.access.record_scope)}</dd>
+                </div>
+              ) : null}
+            </dl>
             <p>{detail.project.description || 'No description.'}</p>
             <p className="muted">Created {formatWhen(detail.project.created_at)}</p>
             <p className="muted">Updated {formatWhen(detail.project.updated_at)}</p>
             {detail.project.created_by ? <p className="muted">Creator {detail.project.created_by}</p> : null}
             {canManageProject ? (
-              <form className="stack" onSubmit={(event) => void onEdit(event)} noValidate>
+              <form className="panel stack" onSubmit={(event) => void onEdit(event)} noValidate>
                 <h3>Edit project</h3>
-                <label>
+                <label className="required-field">
                   Project name
                   <input name="name" value={editName} onChange={(event) => setEditName(event.target.value)} />
                 </label>
@@ -431,20 +464,27 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
               </form>
             ) : null}
             {canManageProject && detail.project.status === 'active' ? (
-              <button type="button" onClick={() => void onArchive()} disabled={submitting}>
+              <button type="button" className="button-danger" onClick={() => void onArchive()} disabled={submitting}>
                 Archive project
               </button>
             ) : null}
             {detail.project.status === 'archived' ? <p role="status">This project is archived.</p> : null}
-            <section className="stack" aria-labelledby="project-members-heading">
+            <section className="panel stack" aria-labelledby="project-members-heading">
               <h3 id="project-members-heading">Members</h3>
-              {members.status === 'loading' ? <p role="status">Loading members</p> : null}
+              {members.status === 'loading' ? (
+                <>
+                  <p role="status">Loading members</p>
+                  <LoadingSkeleton />
+                </>
+              ) : null}
               {members.status === 'error' ? (
                 <p role="alert" className="alert alert-error">
                   {members.message}
                 </p>
               ) : null}
-              {members.status === 'ready' && members.items.length === 0 ? <p>No members are on this project.</p> : null}
+              {members.status === 'ready' && members.items.length === 0 ? (
+                <EmptyState title="No members" message="No members are on this project." />
+              ) : null}
               {members.status === 'ready' && members.items.length > 0 ? (
                 <ul className="member-list">
                   {members.items.map((member) => {
@@ -480,10 +520,20 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
                               </select>
                             </label>
                             <div className="row-actions">
-                              <button type="button" onClick={() => void onSaveRole(member)} disabled={submitting}>
+                              <button
+                                type="button"
+                                className="button-secondary"
+                                onClick={() => void onSaveRole(member)}
+                                disabled={submitting}
+                              >
                                 Save role for {label}
                               </button>
-                              <button type="button" onClick={() => void onRemove(member)} disabled={submitting}>
+                              <button
+                                type="button"
+                                className="button-danger"
+                                onClick={() => void onRemove(member)}
+                                disabled={submitting}
+                              >
                                 Remove {label}
                               </button>
                             </div>
@@ -561,8 +611,16 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
 
   return (
     <section className="stack" aria-labelledby="projects-heading">
-      <h2 id="projects-heading">Projects</h2>
-      <form className="stack" onSubmit={onSearch}>
+      <div className="page-header">
+        <div>
+          <h2 id="projects-heading">Projects</h2>
+          <p className="page-intro">Search and open the projects available to this sign-in.</p>
+        </div>
+        <Link className="button-link" to={`/tenants/${tenantId}/projects/new`}>
+          New project
+        </Link>
+      </div>
+      <form className="panel filters" onSubmit={onSearch}>
         <label>
           Search
           <input name="search" value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -575,28 +633,33 @@ export function ProjectsPanel({ tenantId }: { tenantId: string }) {
             <option value="archived">Archived</option>
           </select>
         </label>
-        <div className="row-actions">
-          <button type="submit">Search</button>
-          <Link to={`/tenants/${tenantId}/projects/new`}>New project</Link>
-        </div>
+        <button type="submit">Search</button>
       </form>
-      {list.status === 'loading' ? <p role="status">Loading projects</p> : null}
+      {list.status === 'loading' ? (
+        <>
+          <p role="status">Loading projects</p>
+          <LoadingSkeleton />
+        </>
+      ) : null}
       {list.status === 'error' ? (
         <p role="alert" className="alert alert-error">
           {list.message}
         </p>
       ) : null}
-      {empty ? <p>{empty}</p> : null}
+      {empty ? (
+        <EmptyState title={appliedQuery || statusFilter ? 'No matching projects' : 'No projects yet'} message={empty} />
+      ) : null}
       {list.status === 'ready' && list.items.length > 0 ? (
         <ul className="project-list">
           {list.items.map((project) => (
             <li key={project.id}>
               <Link to={`/tenants/${tenantId}/projects/${project.id}`}>
-                <span>
-                  {project.name}
-                  <span className="muted"> {project.code}</span>
-                </span>
-                <span>{project.status === 'archived' ? 'Archived' : 'Active'}</span>
+                <span className="card-title">{project.name}</span>
+                <span className="muted">{project.code}</span>
+                {project.description ? <span>{project.description}</span> : null}
+                <StatusBadge tone={project.status === 'archived' ? 'warn' : 'ok'}>
+                  {project.status === 'archived' ? 'Archived' : 'Active'}
+                </StatusBadge>
               </Link>
             </li>
           ))}
