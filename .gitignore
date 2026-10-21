@@ -9,3 +9,4 @@ __pycache__/
 *.egg-info/
 backend/data/
 *.sqlite
+docs/sprints/

@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { FormsPanel } from '@/features/forms/FormsPanel'
 import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
 import { FollowUpQueues } from '@/features/records/FollowUpsPanel'
+import { ImportsPanel } from '@/features/imports/ImportsPanel'
 import { RemindersPanel } from '@/features/reminders/RemindersPanel'
 import { RecordsPanel } from '@/features/records/RecordsPanel'
 import { LoadingSkeleton, NavIcon } from '@/ui/chrome'
@@ -71,6 +72,9 @@ function projectsAllowed(access: ProductAccess, permissions: string[]): boolean 
 }
 
 function workspacePage(pathname: string): string {
+  if (pathname.includes('/imports')) {
+    return 'Import'
+  }
   if (pathname.includes('/reminders')) {
     return 'Reminders'
   }
@@ -98,6 +102,7 @@ export function CrmShellPage() {
   const navigate = useNavigate()
   const onLeads = location.pathname.endsWith('/leads')
   const onForms = location.pathname.includes('/forms')
+  const onImports = location.pathname.includes('/imports')
   const onReminders = location.pathname.includes('/reminders')
   const onFollowUps = location.pathname.includes('/follow-ups')
   const onRecords = location.pathname.includes('/records')
@@ -425,6 +430,19 @@ export function CrmShellPage() {
           {screen.status === 'shell' && screen.canOpenProjects ? (
             <Link
               className="nav-link"
+              to={`/tenants/${tenantIdForNav}/imports`}
+              aria-current={onImports ? 'page' : undefined}
+            >
+              <NavIcon name="records" />
+              <span className="nav-label">Import</span>
+            </Link>
+          ) : null}
+          {screen.status === 'shell' && !screen.canOpenProjects ? (
+            <p className="nav-note">Import is not available for this sign-in.</p>
+          ) : null}
+          {screen.status === 'shell' && screen.canOpenProjects ? (
+            <Link
+              className="nav-link"
               to={`/tenants/${tenantIdForNav}/reminders`}
               aria-current={onReminders ? 'page' : undefined}
             >
@@ -529,7 +547,7 @@ export function CrmShellPage() {
 
           {screen.status === 'shell' ? (
             <section className="stack" aria-label={screen.access.product_name}>
-              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders ? (
+              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders && !onImports ? (
                 <h2 id="crm-heading">Overview</h2>
               ) : null}
               {screen.access.available ? (
@@ -544,6 +562,7 @@ export function CrmShellPage() {
               {onProjects && screen.canOpenProjects ? <ProjectsPanel tenantId={screen.access.tenant_id} /> : null}
               {onForms && screen.canOpenProjects ? <FormsPanel tenantId={screen.access.tenant_id} /> : null}
               {onRecords && screen.canOpenProjects ? <RecordsPanel tenantId={screen.access.tenant_id} /> : null}
+              {onImports && screen.canOpenProjects ? <ImportsPanel tenantId={screen.access.tenant_id} /> : null}
               {onReminders && screen.canOpenProjects ? <RemindersPanel tenantId={screen.access.tenant_id} /> : null}
               {onFollowUps && screen.canOpenProjects ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
               {onProjects && !screen.canOpenProjects ? (
@@ -557,6 +576,11 @@ export function CrmShellPage() {
                 </p>
               ) : null}
               {onRecords && !screen.canOpenProjects ? (
+                <p role="alert" className="alert alert-error">
+                  You do not have permission to perform this action.
+                </p>
+              ) : null}
+              {onImports && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>

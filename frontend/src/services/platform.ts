@@ -1113,3 +1113,188 @@ export function retryReminder(tenantId: string, reminderId: string): Promise<Rem
     headers: mutationHeaders(),
   })
 }
+
+export type ImportField = {
+  field_key: string
+  label: string
+  field_type: string
+  required: boolean
+  options: { value: string; label: string }[]
+}
+
+export type ImportCandidate = {
+  kind: string
+  message: string
+  public_number?: string
+  display_name?: string
+  record_id?: string
+  row_number?: string
+  field_label?: string
+}
+
+export type ImportRow = {
+  row_number: number
+  source: Record<string, string>
+  unmapped: Record<string, string>
+  values: Record<string, unknown>
+  errors: { field?: string; column?: string; message?: string }[]
+  candidates: ImportCandidate[]
+  decision: 'accept_new' | 'skip' | 'reject' | null
+  outcome: string
+  record_id: string | null
+}
+
+export type ImportSummary = {
+  input_rows: number
+  header_included: boolean
+  accepted: number
+  rejected: number
+  skipped: number
+  awaiting_review: number
+  not_committed: number
+  preview_accepted?: number
+  preview_rejected?: number
+  preview_skipped?: number
+  preview_awaiting_review?: number
+  records_created?: number
+}
+
+export type ImportJob = {
+  id: string
+  project_id: string
+  form_id: string
+  form_version_id: string
+  filename: string
+  status: string
+  headers: string[]
+  fields: ImportField[]
+  unimportable_fields: { field_key: string; label: string; field_type: string }[]
+  mapping: Record<string, string | null> | null
+  suggested_mapping: Record<string, string | null>
+  unmapped_columns: string[]
+  rows: ImportRow[]
+  summary: ImportSummary
+}
+
+function importPath(tenantId: string, projectId: string, jobId?: string): string {
+  const base = `${projectPath(tenantId, projectId)}/imports`
+  return jobId ? `${base}/${jobId}` : base
+}
+
+export function createImport(
+  tenantId: string,
+  projectId: string,
+  input: { form_id: string; idempotency_key: string; filename: string; content_base64: string },
+): Promise<ImportJob> {
+  return request(crmUrl(), importPath(tenantId, projectId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify(input),
+  })
+}
+
+export function saveImportMapping(
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+  columns: Record<string, string | null>,
+): Promise<ImportJob> {
+  return request(crmUrl(), `${importPath(tenantId, projectId, jobId)}/mapping`, {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ columns }),
+  })
+}
+
+export function previewImport(tenantId: string, projectId: string, jobId: string): Promise<ImportJob> {
+  return request(crmUrl(), `${importPath(tenantId, projectId, jobId)}/preview`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function saveImportDecisions(
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+  rows: { row_number: number; decision: 'accept_new' | 'skip' | 'reject' }[],
+): Promise<ImportJob> {
+  return request(crmUrl(), `${importPath(tenantId, projectId, jobId)}/decisions`, {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ rows }),
+  })
+}
+
+export function commitImport(tenantId: string, projectId: string, jobId: string): Promise<ImportJob> {
+  return request(crmUrl(), `${importPath(tenantId, projectId, jobId)}/commit`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export async function downloadImportErrors(tenantId: string, projectId: string, jobId: string): Promise<void> {
+  await downloadCrmFile(`${importPath(tenantId, projectId, jobId)}/errors`, 'import-errors.csv')
+}
+
+export async function exportRecords(
+  tenantId: string,
+  projectId: string,
+  format: 'csv' | 'xlsx',
+  query: RecordQuery = {},
+): Promise<{ rows: number }> {
+  const params = new URLSearchParams()
+  params.set('format', format)
+  if (query.q) {
+    params.set('q', query.q)
+  }
+  if (query.formId) {
+    params.set('form_id', query.formId)
+  }
+  if (query.source) {
+    params.set('source', query.source)
+  }
+  if (query.createdFrom) {
+    params.set('created_from', query.createdFrom)
+  }
+  if (query.createdTo) {
+    params.set('created_to', query.createdTo)
+  }
+  if (query.sort) {
+    params.set('sort', query.sort)
+  }
+  if (query.direction) {
+    params.set('direction', query.direction)
+  }
+  return downloadCrmFile(`${projectPath(tenantId, projectId)}/record-exports?${params.toString()}`, `records.${format}`)
+}
+
+async function downloadCrmFile(path: string, fallbackName: string): Promise<{ rows: number }> {
+  const response = await fetch(`${crmUrl().replace(/\/+$/, '')}${path}`, { credentials: 'include' })
+  if (!response.ok) {
+    let message = accessMessage(response.status)
+    try {
+      const body = (await response.json()) as { error?: { message?: string } }
+      if (typeof body.error?.message === 'string' && body.error.message.trim()) {
+        message = body.error.message
+      }
+    } catch {
+      // The file response may be empty.
+    }
+    throw new ApiError(response.status, message)
+  }
+  const blob = await response.blob()
+  const header = response.headers.get('Content-Disposition') ?? ''
+  const matched = /filename="([^"]+)"/.exec(header)
+  const filename = matched?.[1] || fallbackName
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  const counted = Number(response.headers.get('X-CRM-Export-Rows'))
+  return { rows: Number.isFinite(counted) ? counted : 0 }
+}

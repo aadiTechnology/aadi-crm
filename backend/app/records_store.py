@@ -125,6 +125,7 @@ def create_record(
     actor_id: str,
     source: str,
     values: dict[str, object],
+    record_id: str | None = None,
 ) -> dict[str, object] | None:
     """Insert one record on the form's current published version.
 
@@ -135,7 +136,7 @@ def create_record(
 
     previous = connection.isolation_level
     connection.isolation_level = None
-    record_id = str(uuid4())
+    chosen_id = record_id or str(uuid4())
     try:
         connection.execute("PRAGMA busy_timeout = 5000")
         connection.execute("BEGIN IMMEDIATE")
@@ -167,7 +168,7 @@ def create_record(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
-                    record_id,
+                    chosen_id,
                     tenant_id,
                     project_id,
                     form_id,
@@ -185,14 +186,14 @@ def create_record(
                     now,
                 ),
             )
-            _insert_values(connection, record_id, tenant_id, project_id, cleaned)
+            _insert_values(connection, chosen_id, tenant_id, project_id, cleaned)
             connection.commit()
         except Exception:
             connection.rollback()
             raise
     finally:
         connection.isolation_level = previous
-    return get_record(connection, tenant_id, project_id, record_id)
+    return get_record(connection, tenant_id, project_id, chosen_id)
 
 
 def list_records(

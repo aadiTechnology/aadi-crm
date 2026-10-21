@@ -1022,6 +1022,31 @@ button[disabled] {
   }
 }
 
+.import-form,
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.import-form {
+  padding: var(--space-3);
+}
+
+.import-form label,
+.import-actions {
+  min-width: 12rem;
+}
+
+@media (max-width: 640px) {
+  .import-form,
+  .import-actions,
+  .import-actions button {
+    width: 100%;
+  }
+}
+
 @keyframes skeleton {
   0% {
     background-position: 100% 0;

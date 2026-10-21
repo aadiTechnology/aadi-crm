@@ -13,6 +13,7 @@ import {
   getRecord,
   listForms,
   listProjects,
+  exportRecords,
   listRecords,
   updateRecord,
   type CrmRecord,
@@ -261,6 +262,21 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
     offset: 0,
   })
   const [reload, setReload] = useState(0)
+  const [exportNote, setExportNote] = useState<string | null>(null)
+
+  async function onExport(format: 'csv' | 'xlsx') {
+    setExportNote('Preparing the export')
+    try {
+      const exported = await exportRecords(tenantId, projectId, format, query)
+      setExportNote(
+        page.status === 'ready'
+          ? `Exported ${exported.rows} data rows. The list reports ${page.total} matching records.`
+          : `Exported ${exported.rows} data rows.`,
+      )
+    } catch (error: unknown) {
+      setExportNote(messageFrom(error))
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -493,8 +509,16 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
           <button type="button" className="button-secondary" onClick={onClear}>
             Clear
           </button>
+          <button type="button" className="button-secondary" onClick={() => void onExport('csv')}>
+            Export CSV
+          </button>
+          <button type="button" className="button-secondary" onClick={() => void onExport('xlsx')}>
+            Export XLSX
+          </button>
         </div>
       </form>
+      {exportNote ? <p role="status">{exportNote}</p> : null}
+      <p>Export uses the current search and filters and includes every matching record, not only this page.</p>
       {page.status === 'loading' ? <LoadingSkeleton /> : null}
       {page.status === 'error' ? (
         <p role="alert" className="alert alert-error">
