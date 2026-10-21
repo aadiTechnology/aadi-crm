@@ -1,5 +1,6 @@
 """Shell isolation against a platform double. No database and no live Control Plane."""
 
+import logging
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -150,3 +151,53 @@ def test_cross_tenant_leads_call_does_not_use_the_other_tenant() -> None:
     assert "Other Org" not in response.text
     assert platform.access_calls == [str(TENANT_A)]
     assert platform.permission_calls == []
+
+
+def _capture(caplog, level: int):
+    logger = logging.getLogger("aadi_crm")
+    caplog.set_level(level, logger="aadi_crm")
+    logger.addHandler(caplog.handler)
+    return logger
+
+
+def test_authentication_denial_is_logged_without_the_session_cookie(caplog) -> None:
+    platform = FakePlatform()
+    platform.access_by_tenant[str(TENANT_A)] = PlatformCallError(401)
+    logger = _capture(caplog, logging.INFO)
+    try:
+        response = _client(platform).get(
+            f"/api/v1/shell/tenants/{TENANT_A}",
+            headers={"cookie": "aadi_session=super-secret-cookie", "x-request-id": "bad id"},
+        )
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert response.status_code == 401
+    request_id = response.headers["x-request-id"]
+    assert request_id != "bad id"
+    assert " " not in request_id
+    assert "super-secret-cookie" not in caplog.text
+    assert "status=401" in caplog.text
+    assert request_id in caplog.text
+
+
+def test_unhandled_error_hides_the_exception_text(caplog) -> None:
+    application = create_app()
+
+    @application.get("/api/v1/diagnostics-probe")
+    def probe() -> None:
+        raise RuntimeError("session=super-secret-cookie")
+
+    logger = _capture(caplog, logging.ERROR)
+    try:
+        response = TestClient(application, raise_server_exceptions=False).get("/api/v1/diagnostics-probe")
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {"code": "INTERNAL_ERROR", "message": "The request could not be completed."}
+    }
+    assert "Traceback" not in response.text
+    assert "super-secret-cookie" not in response.text
+    assert "super-secret-cookie" not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert response.headers["x-request-id"]

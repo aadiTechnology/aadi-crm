@@ -446,10 +446,12 @@ export function FollowUpQueues({ tenantId }: { tenantId: string }) {
   const [params] = useSearchParams()
   const requested = params.get('queue')
   const queue: FollowUpQueueName = requested === 'overdue' || requested === 'upcoming' ? requested : 'today'
+  const fromKpis = params.get('from') === 'kpis'
+  const ownerParam = params.get('owner_user_id') ?? ''
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [project, setProject] = useState<Project | null>(null)
   const [members, setMembers] = useState<ProjectMembership[]>([])
-  const [ownerUserId, setOwnerUserId] = useState('')
+  const [ownerUserId, setOwnerUserId] = useState(ownerParam)
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -457,6 +459,10 @@ export function FollowUpQueues({ tenantId }: { tenantId: string }) {
   const [total, setTotal] = useState(0)
   const [reload, setReload] = useState(0)
   const selected = QUEUES.find((item) => item.id === queue) ?? QUEUES[1]
+
+  useEffect(() => {
+    setOwnerUserId(ownerParam)
+  }, [ownerParam])
 
   useEffect(() => {
     setOffset(0)
@@ -561,13 +567,18 @@ export function FollowUpQueues({ tenantId }: { tenantId: string }) {
         <span aria-hidden="true">/</span>
         <span>{project?.name ?? 'Project'}</span>
       </nav>
+      {fromKpis ? (
+        <p>
+          <Link to={`/tenants/${tenantId}/kpis/${projectId}`}>Back to project KPIs</Link>
+        </p>
+      ) : null}
       <h2 id="queue-heading">{selected.id === 'today' ? 'Follow-ups due today' : `${selected.label} follow-ups`}</h2>
       <p>Queues use India Standard Time. A follow-up is in one queue only.</p>
       <div className="queue-tabs" role="navigation" aria-label="Follow-up queues">
         {QUEUES.map((item) => (
           <Link
             key={item.id}
-            to={`/tenants/${tenantId}/follow-ups/${projectId}?queue=${item.id}`}
+            to={queueTabHref(tenantId, projectId, item.id, fromKpis, ownerUserId)}
             aria-current={item.id === queue ? 'page' : undefined}
           >
             {item.label}
@@ -653,4 +664,15 @@ export function FollowUpQueues({ tenantId }: { tenantId: string }) {
       </div>
     </section>
   )
+}
+
+function queueTabHref(tenantId: string, projectId: string, queue: string, fromKpis: boolean, ownerUserId: string): string {
+  const params = new URLSearchParams({ queue })
+  if (fromKpis) {
+    params.set('from', 'kpis')
+  }
+  if (ownerUserId) {
+    params.set('owner_user_id', ownerUserId)
+  }
+  return `/tenants/${tenantId}/follow-ups/${projectId}?${params}`
 }

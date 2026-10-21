@@ -140,6 +140,34 @@ it('hides leads when the product is unavailable', async () => {
   expect(document.querySelector('.app')).not.toHaveAttribute('style')
 })
 
+it('closes the navigation with Escape and returns focus to the menu button', async () => {
+  const user = userEvent.setup()
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(false))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}`)
+  const menu = await screen.findByRole('button', { name: 'Open navigation' })
+  await user.click(menu)
+  expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveAttribute('aria-expanded', 'true')
+  await user.keyboard('{Escape}')
+  const closed = screen.getByRole('button', { name: 'Open navigation' })
+  expect(closed).toHaveAttribute('aria-expanded', 'false')
+  expect(closed).toHaveFocus()
+})
+
 it('hides leads when the permission is missing and the stub denies a direct visit', async () => {
   asFetch().mockImplementation((input: RequestInfo | URL) => {
     const url = String(input)

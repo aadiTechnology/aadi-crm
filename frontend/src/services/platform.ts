@@ -1298,3 +1298,89 @@ async function downloadCrmFile(path: string, fallbackName: string): Promise<{ ro
   const counted = Number(response.headers.get('X-CRM-Export-Rows'))
   return { rows: Number.isFinite(counted) ? counted : 0 }
 }
+
+export type ProjectKpis = {
+  follow_up_timezone: string
+  record_date_boundary: string
+  window_start: string
+  window_end: string
+  record_period: { created_from: string; created_to: string; applied: boolean }
+  active_records: number
+  records_created: number | null
+  records_by_form: { form_id: string; form_name: string; count: number }[]
+  follow_ups: {
+    overdue: number
+    today: number
+    upcoming: number
+    completed: number
+    by_owner: { owner_user_id: string; overdue: number; today: number; upcoming: number }[]
+    by_due_date: { queue: string; due_date: string; count: number }[]
+  }
+  omitted: string[]
+}
+
+export type CompletedFollowUp = {
+  id: string
+  record_id: string
+  public_number: string
+  display_name: string
+  task_type: string
+  task_type_label: string
+  owner_user_id: string
+  completed_at: string
+  due_date: string
+  due_time: string
+}
+
+export type AuditEvent = {
+  id: string
+  occurred_at: string
+  action: string
+  resource_type: string
+  resource_id: string | null
+  summary: string
+  outcome: 'success' | 'failure'
+  actor_user_id: string | null
+}
+
+export function projectKpis(
+  tenantId: string,
+  projectId: string,
+  query: { createdFrom?: string; createdTo?: string } = {},
+): Promise<ProjectKpis> {
+  const params = new URLSearchParams()
+  if (query.createdFrom) {
+    params.set('created_from', query.createdFrom)
+  }
+  if (query.createdTo) {
+    params.set('created_to', query.createdTo)
+  }
+  const search = params.toString()
+  return request(crmUrl(), `${projectPath(tenantId, projectId)}/kpis${search ? `?${search}` : ''}`)
+}
+
+export function listCompletedFollowUps(
+  tenantId: string,
+  projectId: string,
+  query: { limit?: number; offset?: number } = {},
+): Promise<{ items: CompletedFollowUp[]; total: number; limit: number; offset: number; status: 'completed' }> {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  if (query.offset !== undefined) {
+    params.set('offset', String(query.offset))
+  }
+  const search = params.toString()
+  return request(
+    crmUrl(),
+    `${projectPath(tenantId, projectId)}/kpis/completed-follow-ups${search ? `?${search}` : ''}`,
+  )
+}
+
+export function listAuditEvents(
+  tenantId: string,
+  limit = 50,
+): Promise<{ items: AuditEvent[]; limit: number; source: string }> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/audit-events?limit=${limit}`)
+}

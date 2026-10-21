@@ -6,6 +6,16 @@ from uuid import UUID
 import httpx
 
 PRODUCT_KEY = "crm"
+_AUDIT_FIELDS = (
+    "id",
+    "occurred_at",
+    "action",
+    "resource_type",
+    "resource_id",
+    "summary",
+    "outcome",
+    "actor_user_id",
+)
 
 
 class PlatformCallError(Exception):
@@ -111,6 +121,16 @@ class PlatformClient:
             raise PlatformCallError(502)
         return user
 
+    def list_audit_events(self, tenant_id: str, cookie: str | None, *, limit: int) -> list[dict[str, object]]:
+        """Forward `GET /tenants/{id}/audit-events`. Metadata is not returned."""
+
+        if limit < 1 or limit > 100:
+            raise PlatformCallError(502)
+        payload = self._get(f"/api/v1/tenants/{tenant_id}/audit-events?limit={limit}", cookie)
+        if not isinstance(payload, list):
+            raise PlatformCallError(502)
+        return visible_audit_events(payload)
+
     def _get(self, path: str, cookie: str | None) -> dict | list:
         headers = {}
         if cookie:
@@ -159,3 +179,52 @@ def _tenant_user(payload: object) -> TenantUserView:
         identity_active=identity_active,
         membership_status=membership_status,
     )
+
+
+def visible_audit_events(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, list):
+        raise PlatformCallError(502)
+    return [_audit_event(item) for item in payload]
+
+
+def _audit_event(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise PlatformCallError(502)
+    event_id = payload.get("id")
+    occurred_at = payload.get("occurred_at")
+    action = payload.get("action")
+    resource_type = payload.get("resource_type")
+    summary = payload.get("summary")
+    outcome = payload.get("outcome")
+    if (
+        not isinstance(event_id, str)
+        or not event_id.strip()
+        or not isinstance(occurred_at, str)
+        or not occurred_at.strip()
+        or not isinstance(action, str)
+        or not action.strip()
+        or not isinstance(resource_type, str)
+        or not resource_type.strip()
+        or not isinstance(summary, str)
+        or outcome not in {"success", "failure"}
+    ):
+        raise PlatformCallError(502)
+    resource_id = payload.get("resource_id")
+    actor_user_id = payload.get("actor_user_id")
+    if resource_id is not None and not isinstance(resource_id, str):
+        raise PlatformCallError(502)
+    if actor_user_id is not None and not isinstance(actor_user_id, str):
+        raise PlatformCallError(502)
+    visible = {
+        "id": event_id,
+        "occurred_at": occurred_at,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "summary": summary[:500],
+        "outcome": outcome,
+        "actor_user_id": actor_user_id,
+    }
+    if set(visible) != set(_AUDIT_FIELDS):
+        raise PlatformCallError(502)
+    return visible

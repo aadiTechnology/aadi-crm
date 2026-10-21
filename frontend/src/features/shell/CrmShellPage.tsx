@@ -1,9 +1,11 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { FormsPanel } from '@/features/forms/FormsPanel'
 import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
 import { FollowUpQueues } from '@/features/records/FollowUpsPanel'
+import { ReportingPanel } from '@/features/reporting/ReportingPanel'
+import { AuditPanel } from '@/features/audit/AuditPanel'
 import { ImportsPanel } from '@/features/imports/ImportsPanel'
 import { RemindersPanel } from '@/features/reminders/RemindersPanel'
 import { RecordsPanel } from '@/features/records/RecordsPanel'
@@ -72,6 +74,12 @@ function projectsAllowed(access: ProductAccess, permissions: string[]): boolean 
 }
 
 function workspacePage(pathname: string): string {
+  if (pathname.includes('/audit')) {
+    return 'Audit'
+  }
+  if (pathname.includes('/kpis')) {
+    return 'Project KPIs'
+  }
   if (pathname.includes('/imports')) {
     return 'Import'
   }
@@ -105,6 +113,8 @@ export function CrmShellPage() {
   const onImports = location.pathname.includes('/imports')
   const onReminders = location.pathname.includes('/reminders')
   const onFollowUps = location.pathname.includes('/follow-ups')
+  const onKpis = location.pathname.includes('/kpis')
+  const onAudit = location.pathname.includes('/audit')
   const onRecords = location.pathname.includes('/records')
   const onProjects = location.pathname.includes('/projects') && !onForms && !onRecords
   const [sessionVersion, setSessionVersion] = useState(0)
@@ -113,10 +123,26 @@ export function CrmShellPage() {
   const [password, setPassword] = useState('')
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setNavOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    if (!navOpen) {
+      return
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return
+      }
+      setNavOpen(false)
+      menuButtonRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
 
   const faviconUrl = screen.status === 'shell' ? screen.branding?.faviconUrl : null
   useEffect(() => {
@@ -369,7 +395,7 @@ export function CrmShellPage() {
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}`}
-              aria-current={!onLeads && !onProjects && !onForms && !onRecords ? 'page' : undefined}
+              aria-current={!onLeads && !onProjects && !onForms && !onRecords && !onKpis && !onAudit ? 'page' : undefined}
             >
               <NavIcon name="overview" />
               <span className="nav-label">Overview</span>
@@ -460,6 +486,26 @@ export function CrmShellPage() {
               <span className="nav-label">Follow-ups</span>
             </Link>
           ) : null}
+          {screen.status === 'shell' && screen.canOpenProjects ? (
+            <Link
+              className="nav-link"
+              to={`/tenants/${tenantIdForNav}/kpis`}
+              aria-current={onKpis ? 'page' : undefined}
+            >
+              <NavIcon name="records" />
+              <span className="nav-label">KPIs</span>
+            </Link>
+          ) : null}
+          {screen.status === 'shell' && screen.canOpenProjects ? (
+            <Link
+              className="nav-link"
+              to={`/tenants/${tenantIdForNav}/audit`}
+              aria-current={onAudit ? 'page' : undefined}
+            >
+              <NavIcon name="records" />
+              <span className="nav-label">Audit</span>
+            </Link>
+          ) : null}
           {screen.status === 'shell' && !screen.canOpenProjects ? (
             <p className="nav-note">Reminders is not available for this sign-in.</p>
           ) : null}
@@ -490,6 +536,7 @@ export function CrmShellPage() {
       <div className="workspace">
         <header className="topbar">
           <button
+            ref={menuButtonRef}
             type="button"
             className="button-ghost menu-button"
             aria-expanded={navOpen}
@@ -547,7 +594,7 @@ export function CrmShellPage() {
 
           {screen.status === 'shell' ? (
             <section className="stack" aria-label={screen.access.product_name}>
-              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders && !onImports ? (
+              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders && !onImports && !onKpis && !onAudit ? (
                 <h2 id="crm-heading">Overview</h2>
               ) : null}
               {screen.access.available ? (
@@ -565,6 +612,8 @@ export function CrmShellPage() {
               {onImports && screen.canOpenProjects ? <ImportsPanel tenantId={screen.access.tenant_id} /> : null}
               {onReminders && screen.canOpenProjects ? <RemindersPanel tenantId={screen.access.tenant_id} /> : null}
               {onFollowUps && screen.canOpenProjects ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
+              {onKpis && screen.canOpenProjects ? <ReportingPanel tenantId={screen.access.tenant_id} /> : null}
+              {onAudit && screen.canOpenProjects ? <AuditPanel tenantId={screen.access.tenant_id} /> : null}
               {onProjects && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
@@ -591,6 +640,16 @@ export function CrmShellPage() {
                 </p>
               ) : null}
               {onFollowUps && !screen.canOpenProjects ? (
+                <p role="alert" className="alert alert-error">
+                  You do not have permission to perform this action.
+                </p>
+              ) : null}
+              {onKpis && !screen.canOpenProjects ? (
+                <p role="alert" className="alert alert-error">
+                  You do not have permission to perform this action.
+                </p>
+              ) : null}
+              {onAudit && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>

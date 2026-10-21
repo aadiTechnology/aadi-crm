@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { FormRenderer, type FormValue } from '@/features/forms/FormRenderer'
 import { RecordFollowUps } from '@/features/records/FollowUpsPanel'
@@ -238,6 +238,13 @@ export function RecordsPanel({ tenantId }: { tenantId: string }) {
 }
 
 function RecordList({ tenantId, projectId }: { tenantId: string; projectId: string }) {
+  const [params] = useSearchParams()
+  const preset = {
+    formId: params.get('form_id') ?? '',
+    createdFrom: params.get('created_from') ?? '',
+    createdTo: params.get('created_to') ?? '',
+  }
+  const fromKpis = params.get('from') === 'kpis'
   const [project, setProject] = useState<Project | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [forms, setForms] = useState<FormDefinition[]>([])
@@ -254,12 +261,15 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
     limit: DEFAULT_PAGE_SIZE,
     offset: 0,
   })
-  const [draft, setDraft] = useState({ q: '', formId: '', source: '', createdFrom: '', createdTo: '' })
+  const [draft, setDraft] = useState({ q: '', formId: preset.formId, source: '', createdFrom: preset.createdFrom, createdTo: preset.createdTo })
   const [query, setQuery] = useState<RecordQuery>({
     sort: 'created_at',
     direction: 'desc',
     limit: DEFAULT_PAGE_SIZE,
     offset: 0,
+    formId: preset.formId || undefined,
+    createdFrom: preset.createdFrom || undefined,
+    createdTo: preset.createdTo || undefined,
   })
   const [reload, setReload] = useState(0)
   const [exportNote, setExportNote] = useState<string | null>(null)
@@ -307,6 +317,27 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
       cancelled = true
     }
   }, [tenantId, projectId])
+
+  useEffect(() => {
+    const formId = preset.formId
+    const createdFrom = preset.createdFrom
+    const createdTo = preset.createdTo
+    setDraft((current) => {
+      if (current.formId === formId && current.createdFrom === createdFrom && current.createdTo === createdTo) {
+        return current
+      }
+      return { ...current, formId, createdFrom, createdTo }
+    })
+    setQuery((current) => {
+      const nextForm = formId || undefined
+      const nextFrom = createdFrom || undefined
+      const nextTo = createdTo || undefined
+      if ((current.formId ?? '') === formId && (current.createdFrom ?? '') === createdFrom && (current.createdTo ?? '') === createdTo) {
+        return current
+      }
+      return { ...current, formId: nextForm, createdFrom: nextFrom, createdTo: nextTo, offset: 0 }
+    })
+  }, [preset.formId, preset.createdFrom, preset.createdTo])
 
   useEffect(() => {
     let cancelled = false
@@ -392,6 +423,11 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
         <span aria-hidden="true">/</span>
         <span>{project?.name ?? 'Project'}</span>
       </nav>
+      {fromKpis ? (
+        <p>
+          <Link to={`/tenants/${tenantId}/kpis/${projectId}`}>Back to project KPIs</Link>
+        </p>
+      ) : null}
       <div className="page-header">
         <div>
           <h2 id="record-list-heading">{project?.name ?? 'Records'}</h2>

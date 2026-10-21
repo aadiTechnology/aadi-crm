@@ -33,6 +33,8 @@ class FakePlatform:
         )
         self.users_by_tenant: dict[str, list[TenantUserView] | PlatformCallError] = {}
         self.user_lookups: list[tuple[str, str]] = []
+        self.audit_by_tenant: dict[str, list[dict[str, object]] | PlatformCallError] = {}
+        self.audit_calls: list[tuple[str, int]] = []
 
     def product_access(self, tenant_id: str, cookie: str | None) -> ProductAccessView:
         self.access_calls.append(tenant_id)
@@ -69,6 +71,14 @@ class FakePlatform:
             if user.user_id == user_id:
                 return user
         raise PlatformCallError(404)
+
+    def list_audit_events(self, tenant_id: str, cookie: str | None, *, limit: int) -> list[dict[str, object]]:
+        del cookie
+        self.audit_calls.append((tenant_id, limit))
+        result = self.audit_by_tenant.get(tenant_id, [])
+        if isinstance(result, PlatformCallError):
+            raise result
+        return result[:limit]
 
 
 def _access(tenant_id: UUID, *, available: bool = True, name: str = "Aadi Technology") -> ProductAccessView:
