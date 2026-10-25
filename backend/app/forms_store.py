@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.db import begin_immediate
+
 _FORM_COLUMNS = (
     "id, tenant_id, project_id, name, description, status, created_by, updated_by, created_at, updated_at"
 )
@@ -211,42 +213,51 @@ def add_field(
         return None
     field_id = str(uuid4())
     now = _now()
+    previous = connection.isolation_level
+    connection.isolation_level = None
     try:
-        position = _next_position(connection, form_id)
-        connection.execute(
-            f"""
-            INSERT INTO form_fields ({_FIELD_COLUMNS})
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                field_id,
-                tenant_id,
-                project_id,
-                form_id,
-                field_key,
-                label,
-                field_type,
-                1 if required else 0,
-                help_text,
-                section_name,
-                position,
-                json.dumps(config, separators=(",", ":"), sort_keys=True),
-                now,
-                now,
-            ),
-        )
-        connection.execute(
-            """
-            UPDATE form_definitions
-            SET updated_by = ?, updated_at = ?
-            WHERE tenant_id = ? AND project_id = ? AND id = ?
-            """,
-            (actor_id, now, tenant_id, project_id, form_id),
-        )
-        connection.commit()
-    except sqlite3.IntegrityError:
-        connection.rollback()
-        raise DuplicateFieldKey from None
+        begin_immediate(connection, f"form-field:{form_id}")
+        try:
+            position = _next_position(connection, form_id)
+            connection.execute(
+                f"""
+                INSERT INTO form_fields ({_FIELD_COLUMNS})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    field_id,
+                    tenant_id,
+                    project_id,
+                    form_id,
+                    field_key,
+                    label,
+                    field_type,
+                    1 if required else 0,
+                    help_text,
+                    section_name,
+                    position,
+                    json.dumps(config, separators=(",", ":"), sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE form_definitions
+                SET updated_by = ?, updated_at = ?
+                WHERE tenant_id = ? AND project_id = ? AND id = ?
+                """,
+                (actor_id, now, tenant_id, project_id, form_id),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            raise DuplicateFieldKey from None
+        except Exception:
+            connection.rollback()
+            raise
+    finally:
+        connection.isolation_level = previous
     created = _get_field(connection, tenant_id, project_id, form_id, field_id)
     if created is None:
         raise RuntimeError("The field insert did not persist.")

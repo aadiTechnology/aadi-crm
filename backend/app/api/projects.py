@@ -22,8 +22,9 @@ from app.db import (
     apply_migrations,
     archive_project,
     connect,
+    connect_sqlite,
     create_project,
-    database_path,
+    resolve_database,
     get_project,
     grant_membership,
     list_project_memberships,
@@ -71,8 +72,12 @@ class Caller:
 
 
 def get_connection() -> Iterator:
-    apply_migrations()
-    connection = connect(database_path())
+    target = resolve_database()
+    if target.dialect == "sqlite":
+        apply_migrations(target.path)
+        connection = connect_sqlite(target.path)
+    else:
+        connection = connect()
     try:
         yield connection
     finally:

@@ -12,6 +12,7 @@ import sqlite3
 from datetime import datetime
 
 from app import followups_store
+from app.db import follow_up_due_date_expr
 
 _RECORD_FROM = """
     FROM records
@@ -28,7 +29,7 @@ _FOLLOW_FROM = """
      AND records.project_id = follow_ups.project_id
 """
 # Asia/Kolkata is UTC+05:30 and does not observe daylight saving.
-_DUE_DATE = "date(datetime(replace(substr(follow_ups.due_at, 1, 19), 'T', ' '), '+330 minutes'))"
+# The SQL expression is chosen per connection in _by_due_date.
 
 
 def project_kpis(
@@ -226,7 +227,7 @@ def _by_due_date(
             WHEN follow_ups.due_at < ? THEN 'today'
             ELSE 'upcoming'
           END AS queue,
-          {_DUE_DATE} AS due_date,
+          {follow_up_due_date_expr(connection)} AS due_date,
           COUNT(*) AS count
         {_FOLLOW_FROM}
         WHERE {where}

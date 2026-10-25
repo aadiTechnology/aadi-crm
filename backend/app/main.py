@@ -19,7 +19,7 @@ from app.api.forms import router as forms_router
 from app.api.projects import router as projects_router
 from app.api.records import router as records_router
 from app.api.shell import router as shell_router
-from app.db import database_path
+from app.db import resolve_database
 
 _LOG = logging.getLogger("aadi_crm")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
@@ -60,7 +60,7 @@ def create_app() -> FastAPI:
     log = _logger()
     log.info(
         "startup database_name=%s platform_base_configured=%s",
-        database_path().name,
+        resolve_database().label,
         bool(os.environ.get("PLATFORM_API_BASE_URL", "").strip()),
     )
 

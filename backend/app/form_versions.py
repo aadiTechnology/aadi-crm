@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.db import begin_immediate
 from app.forms_store import DuplicateFormName, FormDefinitionRow, FormFieldRow, get_form
 
 _FIELD_TYPES = {
@@ -148,8 +149,7 @@ def publish_form(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection, f"form-version:{form_id}")
         try:
             form = get_form(connection, tenant_id, project_id, form_id)
             if form is None:
@@ -223,8 +223,7 @@ def replace_draft_from_published(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection, f"form-field:{form_id}")
         try:
             form = get_form(connection, tenant_id, project_id, form_id)
             if form is None:

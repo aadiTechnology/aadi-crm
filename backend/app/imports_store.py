@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from app.db import begin_immediate, set_lock_wait
 from app.form_versions import get_version
 from app.forms_store import get_form
 from app.records_store import (
@@ -62,7 +63,7 @@ def create_job(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection, f"import-key:{tenant_id}:{project_id}:{idempotency_key}")
         try:
             existing = _job_by_key(connection, tenant_id, project_id, idempotency_key)
             if existing is not None:
@@ -304,7 +305,7 @@ def commit_job(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection, f"import-job:{job_id}")
         try:
             current = _require_job(connection, tenant_id, project_id, job_id)
             if current["status"] == "completed":
@@ -1112,7 +1113,7 @@ def _csv_cell(value: str) -> str:
 
 
 def _busy(connection: sqlite3.Connection) -> None:
-    connection.execute("PRAGMA busy_timeout = 5000")
+    set_lock_wait(connection, 5000)
 
 
 def _now() -> str:

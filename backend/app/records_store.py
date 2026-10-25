@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.db import begin_immediate
 from app.form_versions import get_version
 from app.forms_store import get_form
 
@@ -138,8 +139,7 @@ def create_record(
     connection.isolation_level = None
     chosen_id = record_id or str(uuid4())
     try:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection, f"record-sequence:{project_id}")
         try:
             form = get_form(connection, tenant_id, project_id, form_id)
             if form is None:
@@ -299,8 +299,7 @@ def update_record(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection)
         try:
             row = connection.execute(
                 f"""
@@ -368,8 +367,7 @@ def archive_record(
     previous = connection.isolation_level
     connection.isolation_level = None
     try:
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("BEGIN IMMEDIATE")
+        begin_immediate(connection)
         try:
             row = connection.execute(
                 """

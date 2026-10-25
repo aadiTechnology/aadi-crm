@@ -10,3 +10,24 @@ __pycache__/
 backend/data/
 *.sqlite
 docs/sprints/
+
+# Local environment files. .env.example is a placeholder template and stays trackable.
+.env
+.env.*
+!.env.example
+
+# Local PostgreSQL password files. libpq reads .pgpass and, on Windows, pgpass.conf.
+# The application does not read these files. No copies are in this repository.
+.pgpass
+pgpass.conf
+
+# Private keys and PKCS#12 bundles. Inspection found no .key, .p12, .pfx, or identity
+# key files, and no code that treats those names as source. Public CA certificates
+# (.crt, .pem) are not ignored: this repository has no certificate convention yet,
+# and a later verify-full setup may need a trusted CA that is not a private key.
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa

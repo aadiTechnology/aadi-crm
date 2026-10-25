@@ -386,6 +386,9 @@ def _claim(connection, tenant_id, now, scope_sql, scope_params, seen: list[str])
     if seen:
         exclude = f" AND id NOT IN ({', '.join('?' for _ in seen)})"
         exclude_params = list(seen)
+    locking = ""
+    if not isinstance(connection, sqlite3.Connection):
+        locking = "FOR UPDATE SKIP LOCKED\n            "
     row = connection.execute(
         f"""
         UPDATE reminder_deliveries
@@ -399,7 +402,7 @@ def _claim(connection, tenant_id, now, scope_sql, scope_params, seen: list[str])
               AND {scope_sql}
               {exclude}
             ORDER BY eligible_at, id
-            LIMIT 1
+            {locking}LIMIT 1
         )
         RETURNING *
         """,

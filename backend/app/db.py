@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+POSTGRES_MIGRATIONS = MIGRATIONS / "postgres"
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _COLUMNS = (
     "id, tenant_id, code, name, description, status, created_by, created_at, updated_at"
 )
@@ -69,12 +73,191 @@ def database_path() -> Path:
     return path
 
 
-def connect(path: Path) -> sqlite3.Connection:
+def database_url() -> str:
+    """Return the configured PostgreSQL URL, or an empty string when SQLite stays selected."""
+
+    return os.environ.get("CRM_DATABASE_URL", "").strip()
+
+
+@dataclass(frozen=True)
+class DatabaseTarget:
+    dialect: str
+    path: Path | None = None
+    url: str | None = None
+    sslmode: str | None = None
+    database_name: str = ""
+
+    @property
+    def label(self) -> str:
+        if self.dialect == "sqlite":
+            assert self.path is not None
+            return self.path.name
+        return self.database_name
+
+
+def resolve_database() -> DatabaseTarget:
+    """Choose SQLite unless CRM_DATABASE_URL is set. An invalid URL is an error."""
+
+    configured = database_url()
+    if not configured:
+        path = database_path()
+        return DatabaseTarget(dialect="sqlite", path=path, database_name=path.name)
+    return postgres_target(configured)
+
+
+def postgres_target(url: str) -> DatabaseTarget:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme in {"postgresql+psycopg", "postgresql+psycopg2"}:
+        raise RuntimeError(
+            "CRM_DATABASE_URL must start with postgresql://. A SQLAlchemy driver suffix is not accepted."
+        )
+    if scheme not in {"postgresql", "postgres"}:
+        raise RuntimeError("CRM_DATABASE_URL must be a PostgreSQL URL starting with postgresql://.")
+    host = parsed.hostname
+    if not host:
+        raise RuntimeError("CRM_DATABASE_URL must include a host.")
+    database_name = parsed.path.lstrip("/")
+    if not database_name or "/" in database_name:
+        raise RuntimeError("CRM_DATABASE_URL must include a database name.")
+    if "aadi_platform" in database_name.lower():
+        raise RuntimeError("Refusing a PostgreSQL database that names the Control Plane database.")
+    sslmode = _sslmode(host)
+    return DatabaseTarget(
+        dialect="postgresql",
+        url=url,
+        sslmode=sslmode,
+        database_name=database_name,
+    )
+
+
+def connect(path: Path | None = None):
+    """Open the requested SQLite file, or PostgreSQL when no file is given and a URL is set."""
+
+    if path is not None:
+        return connect_sqlite(path)
+    target = resolve_database()
+    if target.dialect == "sqlite":
+        assert target.path is not None
+        return connect_sqlite(target.path)
+    return connect_postgres(target)
+
+
+def connect_sqlite(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def connect_postgres(target: DatabaseTarget):
+    if target.dialect != "postgresql" or not target.url or not target.sslmode:
+        raise RuntimeError("PostgreSQL was requested without a usable CRM_DATABASE_URL.")
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError:
+        raise RuntimeError(
+            "PostgreSQL is configured but the psycopg package is not installed."
+        ) from None
+    try:
+        raw = psycopg.connect(
+            target.url,
+            sslmode=target.sslmode,
+            connect_timeout=5,
+            row_factory=dict_row,
+        )
+    except Exception:
+        raise RuntimeError(
+            f"Could not connect to PostgreSQL database {target.database_name}. "
+            "SQLite was not used."
+        ) from None
+    connection = PostgresConnection(raw)
+    connection.set_lock_wait(5000)
+    return connection
+
+
+def begin_immediate(connection, lock_key: str | None = None) -> None:
+    """Start the write transaction used for numbering and other locked updates.
+
+    SQLite takes the reserved lock with BEGIN IMMEDIATE. PostgreSQL takes a
+    transaction advisory lock when lock_key is set, and keeps the unique
+    indexes as the backstop. The caller commits or rolls back.
+    """
+
+    if isinstance(connection, sqlite3.Connection):
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("BEGIN IMMEDIATE")
+        return
+    connection.begin_immediate(lock_key)
+
+
+def set_lock_wait(connection, milliseconds: int = 5000) -> None:
+    if isinstance(connection, sqlite3.Connection):
+        connection.execute(f"PRAGMA busy_timeout = {int(milliseconds)}")
+        return
+    connection.set_lock_wait(milliseconds)
+
+
+def follow_up_due_date_expr(connection) -> str:
+    """Civil date of a UTC follow-up stamp after adding Asia/Kolkata's fixed offset."""
+
+    if isinstance(connection, sqlite3.Connection):
+        return "date(datetime(replace(substr(follow_ups.due_at, 1, 19), 'T', ' '), '+330 minutes'))"
+    return (
+        "CAST((CAST(substring(follow_ups.due_at FROM 1 FOR 19) AS timestamp) "
+        "+ interval '330 minutes') AS date)"
+    )
+
+
+def apply_postgres_migrations() -> str:
+    """Apply pending PostgreSQL scripts. This does not open or modify SQLite."""
+
+    if not database_url():
+        raise RuntimeError(
+            "CRM_DATABASE_URL is not set. PostgreSQL migrations were not applied and SQLite was not opened."
+        )
+    target = resolve_database()
+    if target.dialect != "postgresql":
+        raise RuntimeError("CRM_DATABASE_URL did not select PostgreSQL.")
+    connection = connect_postgres(target)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crm_schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.commit()
+        applied = {
+            row["version"]
+            for row in connection.execute("SELECT version FROM crm_schema_migrations")
+        }
+        for script in sorted(POSTGRES_MIGRATIONS.glob("*.sql")):
+            if script.name in applied:
+                continue
+            sql = script.read_text(encoding="utf-8")
+            if "drop table" in sql.lower() or "delete from" in sql.lower():
+                raise RuntimeError(f"Refusing destructive migration {script.name}")
+            try:
+                for statement in split_sql(sql):
+                    connection.execute(statement)
+                if script.name == "002_project_memberships.sql":
+                    _backfill_creator_memberships(connection)
+                connection.execute(
+                    "INSERT INTO crm_schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (script.name, _now()),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+    finally:
+        connection.close()
+    return target.database_name
 
 
 def apply_migrations(path: Path | None = None) -> Path:
@@ -548,3 +731,183 @@ def _now() -> str:
 def _like(term: str) -> str:
     escaped = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
+
+
+class PostgresConnection:
+    """Small psycopg wrapper with the connection methods the stores already use."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+
+    def execute(self, sql: str, parameters=None):
+        import psycopg
+
+        translated = translate_placeholders(sql)
+        try:
+            if parameters is None:
+                return self._connection.execute(translated)
+            return self._connection.execute(translated, parameters)
+        except psycopg.errors.IntegrityError as exc:
+            constraint = ""
+            if exc.diag is not None and exc.diag.constraint_name:
+                constraint = exc.diag.constraint_name
+            raise sqlite3.IntegrityError(constraint or "integrity constraint failed") from None
+
+    def begin_immediate(self, lock_key: str | None = None) -> None:
+        if self._connection.autocommit:
+            self._connection.autocommit = False
+        if lock_key:
+            self.execute("SELECT pg_advisory_xact_lock(?)", (advisory_lock_key(lock_key),))
+
+    def set_lock_wait(self, milliseconds: int) -> None:
+        self.execute("SELECT set_config('lock_timeout', ?, false)", (f"{int(milliseconds)}ms",))
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    @property
+    def isolation_level(self):
+        if self._connection.autocommit:
+            return None
+        return ""
+
+    @isolation_level.setter
+    def isolation_level(self, value) -> None:
+        autocommit = value is None
+        if self._connection.autocommit == autocommit:
+            return
+        if autocommit and _postgres_transaction_open(self._connection):
+            self._connection.commit()
+        self._connection.autocommit = autocommit
+
+
+def translate_placeholders(sql: str) -> str:
+    """Replace SQLite qmark placeholders with psycopg placeholders, outside quotes."""
+
+    parts: list[str] = []
+    in_single = False
+    index = 0
+    length = len(sql)
+    while index < length:
+        character = sql[index]
+        if in_single:
+            parts.append(character)
+            if character == "'":
+                if index + 1 < length and sql[index + 1] == "'":
+                    parts.append("'")
+                    index += 2
+                    continue
+                in_single = False
+            index += 1
+            continue
+        if character == "'":
+            in_single = True
+            parts.append(character)
+            index += 1
+            continue
+        if character == "?":
+            parts.append("%s")
+            index += 1
+            continue
+        parts.append(character)
+        index += 1
+    return "".join(parts)
+
+
+def split_sql(script: str) -> list[str]:
+    """Split a migration script on semicolons that are outside quotes and dollar quotes."""
+
+    statements: list[str] = []
+    current: list[str] = []
+    index = 0
+    length = len(script)
+    in_single = False
+    dollar: str | None = None
+    while index < length:
+        if dollar is not None:
+            if script.startswith(dollar, index):
+                current.append(dollar)
+                index += len(dollar)
+                dollar = None
+                continue
+            current.append(script[index])
+            index += 1
+            continue
+        if in_single:
+            current.append(script[index])
+            if script[index] == "'":
+                if index + 1 < length and script[index + 1] == "'":
+                    current.append("'")
+                    index += 2
+                    continue
+                in_single = False
+            index += 1
+            continue
+        if script[index] == "'":
+            in_single = True
+            current.append("'")
+            index += 1
+            continue
+        if script[index] == "$":
+            end = index + 1
+            while end < length and (script[end].isalnum() or script[end] == "_"):
+                end += 1
+            if end < length and script[end] == "$":
+                dollar = script[index : end + 1]
+                current.append(dollar)
+                index = end + 1
+                continue
+        if script[index] == "-" and index + 1 < length and script[index + 1] == "-":
+            newline = script.find("\n", index)
+            if newline == -1:
+                break
+            current.append("\n")
+            index = newline + 1
+            continue
+        if script[index] == ";":
+            text = "".join(current).strip()
+            if text:
+                statements.append(text)
+            current = []
+            index += 1
+            continue
+        current.append(script[index])
+        index += 1
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def advisory_lock_key(name: str) -> int:
+    digest = hashlib.sha256(name.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
+
+
+def _sslmode(host: str) -> str:
+    configured = os.environ.get("CRM_DATABASE_SSLMODE", "").strip().lower()
+    if not configured:
+        configured = "verify-full"
+    if configured == "disable":
+        if host not in _LOOPBACK_HOSTS:
+            raise RuntimeError(
+                "CRM_DATABASE_SSLMODE=disable is only allowed for a loopback PostgreSQL host."
+            )
+        return "disable"
+    if configured != "verify-full":
+        raise RuntimeError(
+            "CRM_DATABASE_SSLMODE must be verify-full, or disable for a loopback host."
+        )
+    return configured
+
+
+def _postgres_transaction_open(connection) -> bool:
+    from psycopg.pq import TransactionStatus
+
+    return connection.info.transaction_status != TransactionStatus.IDLE
