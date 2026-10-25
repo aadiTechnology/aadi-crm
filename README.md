@@ -6,7 +6,7 @@ Product shell for CRM-S1. This repository is the CRM product. Authentication, te
 
 The shell signs in with the Control Plane session cookie. It lists organizations from the caller's active memberships, then opens a tenant only after `GET /api/v1/tenants/{tenant_id}/products/crm/access`. The Leads link is shown when that response has `available: true` and `GET /api/v1/tenants/{tenant_id}/permissions` includes `crm.lead_management.read`. The CRM leads route enforces both checks again. A hidden link is not authorization.
 
-CRM-S1 does not create records, a CRM password store, or a subscription store. CRM-S2 stores projects in the CRM-owned SQLite file `backend/data/aadi_crm.sqlite`. `CRM_DATABASE_PATH` overrides that file. The store is not the Control Plane database.
+CRM-S1 does not create records, a CRM password store, or a subscription store. CRM-S2 stores projects in the CRM-owned SQLite file `backend/data/aadi_crm.sqlite` when `CRM_DATABASE_URL` is unset. `CRM_DATABASE_PATH` overrides that file. The store is not the Control Plane database.
 
 ## Local run
 
@@ -25,6 +25,34 @@ python -m venv .venv
 .venv\Scripts\uvicorn app.main:app --host localhost --port 8001
 ```
 
+That process uses SQLite. The application reads environment variables only. It does not load `.env`.
+
+To use the local PostgreSQL database `aadi_crm` on the loopback server that has TLS off, export `CRM_DATABASE_URL` and `CRM_DATABASE_SSLMODE` in the same shell, then start the API. `CRM_DATABASE_SSLMODE=disable` is only for that loopback server. Keep the real URL in gitignored `backend/.env`. This command reads those two names from that file and does not print them.
+
+```text
+cd backend
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^(CRM_DATABASE_URL|CRM_DATABASE_SSLMODE)=(.*)$') {
+    Set-Item -Path "env:$($Matches[1])" -Value $Matches[2]
+  }
+}
+.venv\Scripts\uvicorn app.main:app --host localhost --port 8001
+```
+
+The startup log prints `database_name=aadi_crm`. If that URL is set and PostgreSQL cannot be reached, the request fails. The process does not open SQLite instead. Unset `CRM_DATABASE_URL` to return to SQLite.
+
+Apply PostgreSQL migrations only when `crm_schema_migrations` is behind the scripts. The command uses the same two variables from the process environment. It does not open SQLite.
+
+```text
+cd backend
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^(CRM_DATABASE_URL|CRM_DATABASE_SSLMODE)=(.*)$') {
+    Set-Item -Path "env:$($Matches[1])" -Value $Matches[2]
+  }
+}
+.venv\Scripts\python.exe -m app.migrate
+```
+
 ```text
 cd frontend
 npm install
@@ -38,6 +66,24 @@ npm run dev
 ```text
 cd backend
 .venv\Scripts\python -m pytest
+```
+
+Leave `CRM_DATABASE_URL` unset for that SQLite run. The API tests use temporary SQLite files. If `CRM_DATABASE_URL` is set, those tests write to PostgreSQL instead.
+
+The live PostgreSQL tests are skipped unless `CRM_TEST_DATABASE_URL` is set. For the local loopback server, copy the gitignored URL into that variable and leave `CRM_DATABASE_URL` unset so the rest of the suite stays on SQLite:
+
+```text
+cd backend
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^CRM_DATABASE_URL=(.*)$') {
+    Set-Item -Path env:CRM_TEST_DATABASE_URL -Value $Matches[1]
+  }
+  if ($_ -match '^CRM_DATABASE_SSLMODE=(.*)$') {
+    Set-Item -Path env:CRM_TEST_DATABASE_SSLMODE -Value $Matches[1]
+  }
+}
+Remove-Item Env:CRM_DATABASE_URL -ErrorAction SilentlyContinue
+.venv\Scripts\python.exe -m pytest tests/test_postgres_support.py
 ```
 
 ```text
