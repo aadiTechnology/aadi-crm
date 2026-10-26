@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from app.api.projects import _body, _error, _load_project, _open_module, authorize_record, get_connection
 from app.api.shell import get_platform_client
 from app.platform_client import PlatformClient
-from app.project_access import SCOPE_ASSIGNED, RecordRef
+from app.project_access import FEATURE_RECORDS, SCOPE_ASSIGNED, RecordRef
 from app.records_store import (
     SOURCES,
     RecordListQuery,
@@ -55,7 +55,7 @@ def _validation(message: str, fields: dict[str, str] | None = None) -> JSONRespo
 
 
 def _open(tenant_id, project_id, request, platform, connection, *, write: bool):
-    opened = _open_module(tenant_id, request, platform, write=write)
+    opened = _open_module(tenant_id, request, platform, write=write, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "access_records")
@@ -64,7 +64,16 @@ def _open(tenant_id, project_id, request, platform, connection, *, write: bool):
     return opened, loaded
 
 
-def _allowed(connection, tenant_id: str, project_id: str, caller, assignee_user_id: str | None) -> bool:
+def _allowed(
+    connection,
+    tenant_id: str,
+    project_id: str,
+    caller,
+    assignee_user_id: str | None,
+    record_id: str | None = None,
+    *,
+    include_follow_up_owner: bool = False,
+) -> bool:
     decision = authorize_record(
         connection,
         tenant_id=tenant_id,
@@ -76,7 +85,21 @@ def _allowed(connection, tenant_id: str, project_id: str, caller, assignee_user_
             assignee_user_id=assignee_user_id,
         ),
     )
-    return decision.allowed
+    if decision.allowed:
+        return True
+    if not include_follow_up_owner or not record_id:
+        return False
+    owned = connection.execute(
+        """
+        SELECT id
+        FROM follow_ups
+        WHERE tenant_id = ? AND project_id = ? AND record_id = ?
+          AND owner_user_id = ? AND status = 'open'
+        LIMIT 1
+        """,
+        (tenant_id, project_id, record_id, caller.user_id),
+    ).fetchone()
+    return owned is not None
 
 
 def _archived(project) -> JSONResponse | None:
@@ -217,7 +240,15 @@ def read_record(
     record = get_record(connection, str(tenant_id), str(project_id), str(record_id))
     if record is None:
         return _error(404)
-    if not _allowed(connection, str(tenant_id), str(project_id), caller, str(record["assignee_user_id"])):
+    if not _allowed(
+        connection,
+        str(tenant_id),
+        str(project_id),
+        caller,
+        str(record["assignee_user_id"]),
+        str(record_id),
+        include_follow_up_owner=True,
+    ):
         return _error(404)
     return JSONResponse(status_code=200, content=record)
 

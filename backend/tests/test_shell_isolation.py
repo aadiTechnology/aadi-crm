@@ -39,12 +39,19 @@ class FakePlatform:
         return result
 
 
-def _access(tenant_id: UUID, *, available: bool, name: str = "Aadi Technology") -> ProductAccessView:
+def _access(
+    tenant_id: UUID,
+    *,
+    available: bool,
+    name: str = "Aadi Technology",
+    features: tuple[str, ...] = ("lead_management", "project_management", "records"),
+) -> ProductAccessView:
     return ProductAccessView(
         tenant_id=str(tenant_id),
         tenant_name=name,
         product_name="CRM",
         available=available,
+        features=features,
     )
 
 
@@ -117,6 +124,48 @@ def test_unavailable_entitlement_denies_leads_and_keeps_the_shell_readable() -> 
     assert leads.status_code == 403
     assert leads.json()["error"]["code"] == "FORBIDDEN"
     assert "items" not in leads.text
+
+
+def test_missing_lead_feature_denies_leads_when_the_permission_is_present() -> None:
+    platform = FakePlatform()
+    platform.access_by_tenant[str(TENANT_A)] = _access(
+        TENANT_A,
+        available=True,
+        features=("project_management", "records"),
+    )
+    platform.permissions_by_tenant[str(TENANT_A)] = [LEADS]
+    response = _client(platform).get(f"/api/v1/shell/tenants/{TENANT_A}/leads")
+    assert response.status_code == 403
+    assert "items" not in response.text
+
+
+def test_product_access_rejects_a_payload_without_features(monkeypatch) -> None:
+    import httpx
+
+    from app.platform_client import PlatformCallError, PlatformClient
+
+    def fake_get(url: str, headers: dict | None = None, timeout: float | None = None) -> httpx.Response:
+        del headers, timeout
+        if url.endswith("/access"):
+            return httpx.Response(
+                200,
+                json={
+                    "tenant_id": str(TENANT_A),
+                    "tenant_name": "Aadi Technology",
+                    "product_key": "crm",
+                    "product_name": "CRM",
+                    "available": True,
+                },
+            )
+        return httpx.Response(500)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    try:
+        PlatformClient("http://platform.test").product_access(str(TENANT_A), "aadi_session=member")
+    except PlatformCallError as exc:
+        assert exc.status_code == 502
+    else:
+        raise AssertionError("A product-access payload without features was accepted.")
 
 
 def test_missing_permission_denies_leads_when_the_product_is_available() -> None:

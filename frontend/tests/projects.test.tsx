@@ -271,6 +271,7 @@ describe('shell project entry', () => {
           product_key: 'crm',
           product_name: 'CRM',
           available: true,
+          features: ['lead_management', 'project_management', 'records'],
         })
       }
       if (url.endsWith('/permissions')) {
@@ -293,7 +294,7 @@ describe('shell project entry', () => {
     expect(screen.queryByText('Hidden project')).not.toBeInTheDocument()
   })
 
-  it('opens projects from the shell for the registered CRM permission', async () => {
+  it('opens projects from the shell for project access and hides them for lead read', async () => {
     asFetch().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/api/v1/auth/me')) {
@@ -306,10 +307,42 @@ describe('shell project entry', () => {
           product_key: 'crm',
           product_name: 'CRM',
           available: true,
+          features: ['lead_management', 'project_management', 'records'],
         })
       }
       if (url.endsWith('/permissions')) {
         return json(['crm.lead_management.read'])
+      }
+      if (url.endsWith('/configuration')) {
+        return json({}, 404)
+      }
+      if (url.includes('/projects')) {
+        return json({ items: [{ name: 'Hidden project' }] })
+      }
+      return json({}, 500)
+    })
+    renderShell(`/tenants/${TENANT}/projects`)
+    expect(await screen.findByText('Projects is not available for this sign-in.')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Projects' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Hidden project')).not.toBeInTheDocument()
+
+    asFetch().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/me')) {
+        return json({ id: 'user-1', email: 'member@example.com', created_at: '', updated_at: '' })
+      }
+      if (url.endsWith('/products/crm/access')) {
+        return json({
+          tenant_id: TENANT,
+          tenant_name: 'Aadi Technology',
+          product_key: 'crm',
+          product_name: 'CRM',
+          available: true,
+          features: ['lead_management', 'project_management', 'records'],
+        })
+      }
+      if (url.endsWith('/permissions')) {
+        return json(['crm.project_management.access'])
       }
       if (url.endsWith('/configuration')) {
         return json({}, 404)

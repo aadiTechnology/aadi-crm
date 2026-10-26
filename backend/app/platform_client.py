@@ -18,6 +18,14 @@ _AUDIT_FIELDS = (
 )
 
 
+def _uuid(value: str) -> bool:
+    try:
+        UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 class PlatformCallError(Exception):
     """Control Plane status that the shell maps to a generic response."""
 
@@ -32,6 +40,8 @@ class ProductAccessView:
     tenant_name: str
     product_name: str
     available: bool
+    features: tuple[str, ...] = ()
+    membership_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,7 @@ class TenantUserView:
     email: str
     identity_active: bool
     membership_status: str
+    membership_id: str = ""
 
 
 class PlatformClient:
@@ -67,12 +78,18 @@ class PlatformClient:
         product_name = payload.get("product_name")
         available = payload.get("available")
         product_key = payload.get("product_key")
+        features = payload.get("features")
+        membership_id = payload.get("membership_id")
         if (
             not isinstance(tenant, str)
             or not isinstance(name, str)
             or not isinstance(product_name, str)
             or not isinstance(available, bool)
             or product_key != PRODUCT_KEY
+            or not isinstance(features, list)
+            or any(not isinstance(item, str) or not item.strip() for item in features)
+            or not isinstance(membership_id, str)
+            or not _uuid(membership_id)
         ):
             raise PlatformCallError(502)
         return ProductAccessView(
@@ -80,6 +97,8 @@ class PlatformClient:
             tenant_name=name,
             product_name=product_name,
             available=available,
+            features=tuple(item.strip() for item in features),
+            membership_id=membership_id,
         )
 
     def permissions(self, tenant_id: str, cookie: str | None) -> list[str]:
@@ -101,6 +120,17 @@ class PlatformClient:
         except ValueError:
             raise PlatformCallError(502) from None
         return IdentityView(user_id=user_id, email=email)
+
+    def list_product_members(self, tenant_id: str, cookie: str | None) -> list[TenantUserView]:
+        """Forward the product member list. It does not require users.read."""
+
+        payload = self._get(
+            f"/api/v1/tenants/{tenant_id}/products/{PRODUCT_KEY}/members",
+            cookie,
+        )
+        if not isinstance(payload, list):
+            raise PlatformCallError(502)
+        return [_product_member(item) for item in payload]
 
     def list_tenant_users(self, tenant_id: str, cookie: str | None) -> list[TenantUserView]:
         """Forward `GET /tenants/{id}/users`. The Control Plane requires `users.read`."""
@@ -152,6 +182,30 @@ class PlatformClient:
         if not isinstance(body, (dict, list)):
             raise PlatformCallError(502)
         return body
+
+
+def _product_member(payload: object) -> TenantUserView:
+    if not isinstance(payload, dict) or set(payload) != {"id", "email", "membership_id"}:
+        raise PlatformCallError(502)
+    user_id = payload.get("id")
+    email = payload.get("email")
+    membership_id = payload.get("membership_id")
+    if (
+        not isinstance(user_id, str)
+        or not isinstance(email, str)
+        or not email.strip()
+        or not isinstance(membership_id, str)
+        or not _uuid(user_id)
+        or not _uuid(membership_id)
+    ):
+        raise PlatformCallError(502)
+    return TenantUserView(
+        user_id=user_id,
+        email=email,
+        identity_active=True,
+        membership_status="active",
+        membership_id=membership_id,
+    )
 
 
 def _tenant_user(payload: object) -> TenantUserView:

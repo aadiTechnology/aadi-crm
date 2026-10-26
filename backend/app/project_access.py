@@ -9,7 +9,13 @@ SCOPE_ASSIGNED = "assigned"
 ACTIVE = "active"
 
 PROJECT_MANAGE_PERMISSION = "crm.project_management.manage"
-REGISTERED_CRM_PERMISSION = "crm.lead_management.read"
+PROJECT_ACCESS_PERMISSION = "crm.project_management.access"
+RECORDS_ACCESS_PERMISSION = "crm.records.access"
+LEADS_PERMISSION = "crm.lead_management.read"
+REGISTERED_CRM_PERMISSION = LEADS_PERMISSION
+FEATURE_LEADS = "lead_management"
+FEATURE_PROJECTS = "project_management"
+FEATURE_RECORDS = "records"
 
 ROLE_SCOPE = {
     PROJECT_MANAGER: SCOPE_PROJECT,
@@ -78,13 +84,29 @@ class ProjectAccess:
         }
 
 
-def module_allowed(keys: list[str]) -> bool:
-    """Whether the caller may open the project module and create a project.
+def project_module_allowed(keys: list[str]) -> bool:
+    """Whether the caller may open projects, forms, and the project audit view.
 
-    This is not permission to read or change every project in the tenant.
+    Lead read does not open this module. Manage is the tenant-wide bypass.
+    Membership still decides which projects a non-admin can see.
     """
 
-    return PROJECT_MANAGE_PERMISSION in keys or REGISTERED_CRM_PERMISSION in keys
+    return PROJECT_MANAGE_PERMISSION in keys or PROJECT_ACCESS_PERMISSION in keys
+
+
+def records_module_allowed(keys: list[str]) -> bool:
+    """Whether the caller may open records, imports, follow-ups, reminders, and KPIs.
+
+    Lead read and project access do not open this module. Manage is the bypass.
+    """
+
+    return PROJECT_MANAGE_PERMISSION in keys or RECORDS_ACCESS_PERMISSION in keys
+
+
+def module_allowed(keys: list[str]) -> bool:
+    """Project-module entry. Kept for callers that already use this name."""
+
+    return project_module_allowed(keys)
 
 
 def tenant_project_admin(keys: list[str]) -> bool:

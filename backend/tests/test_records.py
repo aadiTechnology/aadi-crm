@@ -15,12 +15,29 @@ from tests.test_projects import (
     TENANT_B,
     USER_ID,
     FakePlatform,
+    _access,
     _allow,
     _become,
     _client,
     _headers,
     _person,
 )
+
+
+def test_records_stay_closed_without_the_records_feature(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A, [LEADS])
+    platform.access_by_tenant[str(TENANT_A)] = _access(
+        TENANT_A,
+        features=("lead_management", "project_management"),
+    )
+    client = _client(tmp_path, monkeypatch, platform)
+    denied = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{USER_ID}/records",
+        headers=_headers(write=False),
+    )
+    assert denied.status_code == 403
+    assert "items" not in denied.text
 
 
 def _ready(client) -> tuple[str, str, str]:

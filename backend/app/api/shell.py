@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from app.platform_client import PlatformCallError, PlatformClient
+from app.project_access import FEATURE_LEADS
 
 LEADS_PERMISSION = "crm.lead_management.read"
 
@@ -86,6 +87,6 @@ def read_leads(
         keys = platform.permissions(str(tenant_id), _cookie(request))
     except PlatformCallError as exc:
         return _error(exc.status_code)
-    if not access.available or LEADS_PERMISSION not in keys:
+    if not access.available or FEATURE_LEADS not in access.features or LEADS_PERMISSION not in keys:
         return _error(403)
     return JSONResponse(status_code=200, content={"module": "leads", "items": []})

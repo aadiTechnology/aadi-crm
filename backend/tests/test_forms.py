@@ -9,6 +9,7 @@ from app.project_access import access_for
 from tests.test_projects import (
     LEADS,
     MANAGE,
+    PROJECT_ACCESS,
     OTHER_ID,
     TENANT_A,
     TENANT_B,
@@ -410,7 +411,7 @@ def test_member_archived_and_scope_boundaries(tmp_path, monkeypatch) -> None:
     assert denied.status_code == 403
     assert "Secret form" not in denied.text
 
-    platform.permissions_by_tenant[str(TENANT_A)] = [LEADS]
+    platform.permissions_by_tenant[str(TENANT_A)] = [PROJECT_ACCESS]
     archived = client.post(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/archive",
         headers=_headers(write=True),

@@ -25,6 +25,7 @@ function renderAt(path: string) {
         <Route path="/" element={<CrmShellPage />} />
         <Route path="/tenants/:tenantId" element={<CrmShellPage />} />
         <Route path="/tenants/:tenantId/leads" element={<CrmShellPage />} />
+        <Route path="/tenants/:tenantId/records" element={<CrmShellPage />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -34,7 +35,11 @@ function identity() {
   return { id: 'user-1', email: 'member@example.com', created_at: '', updated_at: '' }
 }
 
-function access(available: boolean, tenantId = TENANT) {
+function access(
+  available: boolean,
+  tenantId = TENANT,
+  features: string[] = ['lead_management', 'project_management', 'records'],
+) {
   return {
     tenant_id: tenantId,
     tenant_name: 'Aadi Technology',
@@ -42,6 +47,7 @@ function access(available: boolean, tenantId = TENANT) {
     product_key: 'crm',
     product_name: 'CRM',
     available,
+    features,
   }
 }
 
@@ -166,6 +172,56 @@ it('closes the navigation with Escape and returns focus to the menu button', asy
   const closed = screen.getByRole('button', { name: 'Open navigation' })
   expect(closed).toHaveAttribute('aria-expanded', 'false')
   expect(closed).toHaveFocus()
+})
+
+it('hides leads when the plan does not entitle lead management', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true, TENANT, ['project_management', 'records']))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    if (url.includes('/leads')) {
+      return json({ module: 'leads', items: [{ name: 'Hidden lead' }] })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/leads`)
+  expect(await screen.findByText('Leads is not available for this sign-in.')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Leads' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Hidden lead')).not.toBeInTheDocument()
+})
+
+it('hides records when the plan does not entitle records and still shows projects', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true, TENANT, ['lead_management', 'project_management']))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read', 'crm.project_management.access'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/records`)
+  expect(await screen.findByRole('link', { name: 'Projects' })).toBeInTheDocument()
+  expect(screen.getByText('Records is not available for this sign-in.')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Records' })).not.toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('You do not have permission to perform this action.')
 })
 
 it('hides leads when the permission is missing and the stub denies a direct visit', async () => {

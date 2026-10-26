@@ -176,9 +176,12 @@ def test_follow_up_lifecycle_timeline_and_queues(tmp_path, monkeypatch) -> None:
     assert queues["today"].isdisjoint(queues["upcoming"])
 
     _become(platform, OTHER_ID, "member@example.com")
-    hidden = client.get(f"{base}/follow-ups/{today['id']}", headers=_headers(write=False))
-    assert hidden.status_code == 404
-    assert "Send the note" not in hidden.text
+    owned = client.get(f"{base}/follow-ups/{today['id']}", headers=_headers(write=False))
+    assert owned.status_code == 200
+    assert owned.json()["summary"] == "Send the note"
+    unrelated = client.get(f"{base}/follow-ups/{still_due['id']}", headers=_headers(write=False))
+    assert unrelated.status_code == 404
+    assert "Still open" not in unrelated.text
     member_queue = client.get(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/follow-ups?queue=today&owner_user_id={USER_ID}",
         headers=_headers(write=False),
@@ -443,3 +446,52 @@ def _add(client, base: str, **overrides) -> dict:
     created = client.post(f"{base}/follow-ups", headers=_headers(write=True), json=_body(**overrides))
     assert created.status_code == 201
     return created.json()
+
+
+def test_follow_up_owner_can_open_only_the_related_record(tmp_path, monkeypatch) -> None:
+    platform = _platform()
+    client = _client(tmp_path, monkeypatch, platform)
+    monkeypatch.setattr("app.followups_store.clock", _Ticker(datetime(2026, 10, 20, 18, 30, tzinfo=UTC)))
+    project_id, form_id, _version = _ready(client)
+    created = _create(client, project_id, form_id, {"school_name": "Owned school", "priority": "hot"})
+    other = _create(client, project_id, form_id, {"school_name": "Hidden school", "priority": "warm"})
+    assert created.status_code == 201
+    assert other.status_code == 201
+    record_id = created.json()["id"]
+    hidden_id = other.json()["id"]
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    base = f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{record_id}"
+    follow_up = _add(client, base, owner_user_id=OTHER_ID, task_type="note", call_status=None, summary="Call the school")
+    _become(platform, OTHER_ID, "member@example.com")
+    opened = client.get(base, headers=_headers(write=False))
+    assert opened.status_code == 200
+    assert opened.json()["values"]["school_name"] == "Owned school"
+    hidden = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{hidden_id}",
+        headers=_headers(write=False),
+    )
+    assert hidden.status_code == 404
+    assert "Hidden school" not in hidden.text
+    edited = client.patch(
+        base,
+        headers=_headers(write=True),
+        json={"expected_updated_at": opened.json()["updated_at"], "values": {"school_name": "Changed"}},
+    )
+    assert edited.status_code == 404
+    assert "Changed" not in edited.text
+    _become(platform, USER_ID, "manager@example.com")
+    finished = client.post(
+        f"{base}/follow-ups/{follow_up['id']}/complete",
+        headers=_headers(write=True),
+        json={"expected_updated_at": follow_up["updated_at"], "outcome": "Done"},
+    )
+    assert finished.status_code == 200
+    _become(platform, OTHER_ID, "member@example.com")
+    closed = client.get(base, headers=_headers(write=False))
+    assert closed.status_code == 404
+    assert "Owned school" not in closed.text

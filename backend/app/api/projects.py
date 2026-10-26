@@ -43,7 +43,10 @@ from app.project_access import (
     RecordRef,
     access_for,
     decide_record_access,
-    module_allowed,
+    FEATURE_PROJECTS,
+    FEATURE_RECORDS,
+    project_module_allowed,
+    records_module_allowed,
     tenant_project_admin,
 )
 
@@ -69,6 +72,7 @@ class Caller:
     user_id: str
     email: str
     keys: list[str]
+    tenant_membership_id: str = ""
 
 
 def get_connection() -> Iterator:
@@ -85,9 +89,15 @@ def get_connection() -> Iterator:
 
 
 def project_management_allowed(keys: list[str]) -> bool:
-    """Module entry only. Lead read does not administer every project."""
+    """Project-module entry only. Lead read does not open projects."""
 
-    return module_allowed(keys)
+    return project_module_allowed(keys)
+
+
+def _module_permission(feature_key: str, keys: list[str]) -> bool:
+    if feature_key == FEATURE_RECORDS:
+        return records_module_allowed(keys)
+    return project_module_allowed(keys)
 
 
 def _error(status_code: int, message: str | None = None) -> JSONResponse:
@@ -124,6 +134,7 @@ def _open_module(
     platform: PlatformClient,
     *,
     write: bool,
+    feature_key: str = FEATURE_PROJECTS,
 ) -> Caller | JSONResponse:
     if write and not _csrf_matches(request):
         return _error(401)
@@ -134,19 +145,24 @@ def _open_module(
         return _error(exc.status_code)
     if access.tenant_id != str(tenant_id):
         return _error(404)
-    if not access.available:
+    if not access.available or feature_key not in access.features:
         return _error(403)
     try:
         keys = platform.permissions(str(tenant_id), cookie)
     except PlatformCallError as exc:
         return _error(exc.status_code)
-    if not project_management_allowed(keys):
+    if not _module_permission(feature_key, keys):
         return _error(403)
     try:
         identity = platform.identity(cookie)
     except PlatformCallError as exc:
         return _error(exc.status_code)
-    return Caller(user_id=identity.user_id, email=identity.email, keys=keys)
+    return Caller(
+        user_id=identity.user_id,
+        email=identity.email,
+        keys=keys,
+        tenant_membership_id=access.membership_id,
+    )
 
 
 def _project_body(project: ProjectRow, access: ProjectAccess) -> dict[str, object]:
@@ -155,8 +171,17 @@ def _project_body(project: ProjectRow, access: ProjectAccess) -> dict[str, objec
     return body
 
 
+def _binding_matches(membership, caller: Caller) -> bool:
+    bound = membership.tenant_membership_id
+    if not bound:
+        return True
+    return bound == caller.tenant_membership_id
+
+
 def _access_for_user(connection, tenant_id: str, project_id: str, caller: Caller) -> ProjectAccess:
     membership = active_membership(connection, tenant_id, project_id, caller.user_id)
+    if membership is not None and not _binding_matches(membership, caller):
+        membership = None
     return access_for(
         role=None if membership is None else membership.role,
         status=None if membership is None else membership.status,
@@ -235,9 +260,11 @@ async def _body(request: Request) -> dict[str, object] | JSONResponse:
     return payload
 
 
-def _memberships_by_project(connection, tenant_id: str, user_id: str) -> dict[str, MembershipRow]:
+def _memberships_by_project(connection, tenant_id: str, caller: Caller) -> dict[str, MembershipRow]:
     chosen: dict[str, MembershipRow] = {}
-    for membership in list_user_memberships(connection, tenant_id, user_id):
+    for membership in list_user_memberships(connection, tenant_id, caller.user_id):
+        if not _binding_matches(membership, caller):
+            continue
         current = chosen.get(membership.project_id)
         if current is None or (current.status != "active" and membership.status == "active"):
             chosen[membership.project_id] = membership
@@ -256,7 +283,7 @@ def _directory(
     request: Request,
 ) -> list[TenantUserView] | JSONResponse:
     try:
-        return platform.list_tenant_users(str(tenant_id), _cookie(request))
+        return platform.list_product_members(str(tenant_id), _cookie(request))
     except PlatformCallError as exc:
         if exc.status_code == 403:
             return _error(403, "You cannot look up organization members with this sign-in.")
@@ -269,18 +296,12 @@ def _lookup_user(
     user_id: str,
     request: Request,
 ) -> TenantUserView | JSONResponse:
-    try:
-        user = platform.get_tenant_user(str(tenant_id), user_id, _cookie(request))
-    except PlatformCallError as exc:
-        if exc.status_code == 403:
-            return _error(403, "You cannot look up organization members with this sign-in.")
-        if exc.status_code == 404:
-            return _error(404, "That user is not a member of this organization.")
-        return _error(exc.status_code)
-    if user.user_id != user_id:
+    directory = _directory(platform, tenant_id, request)
+    if isinstance(directory, JSONResponse):
+        return directory
+    user = next((item for item in directory if item.user_id == user_id), None)
+    if user is None:
         return _error(404, "That user is not a member of this organization.")
-    if not user.identity_active or user.membership_status != "active":
-        return _error(422, "That user is not an active member of this organization.")
     return user
 
 
@@ -290,7 +311,7 @@ def _emails(
     request: Request,
 ) -> tuple[dict[str, str], bool] | JSONResponse:
     try:
-        users = platform.list_tenant_users(str(tenant_id), _cookie(request))
+        users = platform.list_product_members(str(tenant_id), _cookie(request))
     except PlatformCallError as exc:
         if exc.status_code == 401:
             return _error(401)
@@ -321,10 +342,12 @@ def read_projects(
         status=status,
         member_user_id=member_user_id,
     )
-    owned = _memberships_by_project(connection, str(tenant_id), opened.user_id)
+    owned = _memberships_by_project(connection, str(tenant_id), opened)
     payload = []
     for item in items:
         membership = owned.get(item.id)
+        if member_user_id is not None and membership is None:
+            continue
         access = access_for(
             role=None if membership is None else membership.role,
             status=None if membership is None else membership.status,
@@ -366,6 +389,7 @@ async def post_project(
             name=name,
             description=description,
             created_by=opened.user_id,
+            tenant_membership_id=opened.tenant_membership_id or None,
         )
     except DuplicateProjectCode:
         return _error(409, "A project with this code already exists in this organization.")
@@ -550,6 +574,7 @@ async def post_member(
             user_id=user_id,
             role=role,
             actor_id=opened.user_id,
+            tenant_membership_id=user.membership_id or None,
         )
     except DuplicateMembership:
         return _error(409, "This user is already a member of this project.")

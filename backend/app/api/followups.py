@@ -222,12 +222,15 @@ def read_follow_up(
     if isinstance(opened, JSONResponse):
         return opened
     caller, _loaded = opened
-    record = _record(connection, str(tenant_id), str(project_id), str(record_id), caller)
-    if isinstance(record, JSONResponse):
-        return record
     follow_up = get_follow_up(connection, str(tenant_id), str(project_id), str(record_id), str(follow_up_id))
     if follow_up is None:
         return _error(404)
+    record = get_record(connection, str(tenant_id), str(project_id), str(record_id))
+    if record is None:
+        return _error(404)
+    if not _allowed(connection, str(tenant_id), str(project_id), caller, str(record["assignee_user_id"])):
+        if follow_up["owner_user_id"] != caller.user_id or follow_up["status"] != "open":
+            return _error(404)
     return JSONResponse(status_code=200, content=follow_up)
 
 

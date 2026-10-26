@@ -5,8 +5,29 @@ from datetime import UTC, datetime
 from app.db import connect
 from app.reminders_store import MAX_ATTEMPTS, backoff_seconds
 from tests.test_followups import _add, _body, _platform
-from tests.test_projects import OTHER_ID, TENANT_A, TENANT_B, USER_ID, _become, _headers
+from tests.test_projects import (
+    LEADS,
+    OTHER_ID,
+    TENANT_A,
+    TENANT_B,
+    USER_ID,
+    FakePlatform,
+    _access,
+    _become,
+    _client,
+    _headers,
+)
 from tests.test_records import _create, _ready
+
+
+def test_reminders_require_the_records_feature(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, features=("project_management",))
+    platform.permissions_by_tenant[str(TENANT_A)] = [LEADS]
+    client = _client(tmp_path, monkeypatch, platform)
+    denied = client.get(f"/api/v1/tenants/{TENANT_A}/reminders", headers=_headers(write=False))
+    assert denied.status_code == 403
+    assert "items" not in denied.text
 
 
 def _freeze(monkeypatch) -> None:

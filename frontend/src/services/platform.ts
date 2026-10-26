@@ -3,7 +3,12 @@ import { readFrontendConfig } from '@/lib/config'
 export const CSRF_COOKIE_NAME = 'aadi_csrf'
 export const CSRF_HEADER_NAME = 'X-CSRF-Token'
 export const LEADS_PERMISSION = 'crm.lead_management.read'
+export const PROJECT_ACCESS_PERMISSION = 'crm.project_management.access'
+export const RECORDS_ACCESS_PERMISSION = 'crm.records.access'
 export const PROJECT_MANAGE_PERMISSION = 'crm.project_management.manage'
+export const FEATURE_LEADS = 'lead_management'
+export const FEATURE_PROJECTS = 'project_management'
+export const FEATURE_RECORDS = 'records'
 
 export class ApiError extends Error {
   readonly status: number
@@ -17,8 +22,20 @@ export class ApiError extends Error {
   }
 }
 
-export function canManageProjects(permissions: string[]): boolean {
-  return permissions.includes(PROJECT_MANAGE_PERMISSION) || permissions.includes(LEADS_PERMISSION)
+export function canOpenProjects(permissions: string[]): boolean {
+  return (
+    permissions.includes(PROJECT_MANAGE_PERMISSION) || permissions.includes(PROJECT_ACCESS_PERMISSION)
+  )
+}
+
+export function canOpenRecords(permissions: string[]): boolean {
+  return (
+    permissions.includes(PROJECT_MANAGE_PERMISSION) || permissions.includes(RECORDS_ACCESS_PERMISSION)
+  )
+}
+
+export function featureEntitled(access: ProductAccess, key: string): boolean {
+  return access.available && access.features.includes(key)
 }
 
 export type Identity = {
@@ -38,6 +55,7 @@ export type ProductAccess = {
   product_key: string
   product_name: string
   available: boolean
+  features: string[]
 }
 
 export type ShellBranding = {

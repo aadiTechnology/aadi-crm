@@ -19,7 +19,7 @@ _COLUMNS = (
 )
 _MEMBER_COLUMNS = (
     "id, tenant_id, project_id, user_id, role, scope_policy, status, "
-    "created_by, updated_by, created_at, updated_at"
+    "created_by, updated_by, created_at, updated_at, tenant_membership_id"
 )
 
 
@@ -305,6 +305,7 @@ def create_project(
     name: str,
     description: str,
     created_by: str | None,
+    tenant_membership_id: str | None = None,
 ) -> ProjectRow:
     project_id = str(uuid4())
     now = _now()
@@ -323,9 +324,19 @@ def create_project(
         connection.execute(
             f"""
             INSERT INTO project_memberships ({_MEMBER_COLUMNS})
-            VALUES (?, ?, ?, ?, 'project_manager', 'project', 'active', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'project_manager', 'project', 'active', ?, ?, ?, ?, ?)
             """,
-            (str(uuid4()), tenant_id, project_id, created_by, created_by, created_by, now, now),
+            (
+                str(uuid4()),
+                tenant_id,
+                project_id,
+                created_by,
+                created_by,
+                created_by,
+                now,
+                now,
+                tenant_membership_id,
+            ),
         )
     connection.commit()
     created = get_project(connection, tenant_id, project_id)
@@ -450,6 +461,7 @@ class MembershipRow:
     updated_by: str | None
     created_at: str
     updated_at: str
+    tenant_membership_id: str | None = None
 
     def as_dict(self, *, email: str | None) -> dict[str, str | None]:
         return {
@@ -561,6 +573,7 @@ def grant_membership(
     user_id: str,
     role: str,
     actor_id: str,
+    tenant_membership_id: str | None = None,
 ) -> MembershipRow | None:
     if get_project(connection, tenant_id, project_id) is None:
         return None
@@ -573,9 +586,21 @@ def grant_membership(
         connection.execute(
             f"""
             INSERT INTO project_memberships ({_MEMBER_COLUMNS})
-            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
             """,
-            (membership_id, tenant_id, project_id, user_id, role, scope, actor_id, actor_id, now, now),
+            (
+                membership_id,
+                tenant_id,
+                project_id,
+                user_id,
+                role,
+                scope,
+                actor_id,
+                actor_id,
+                now,
+                now,
+                tenant_membership_id,
+            ),
         )
         connection.commit()
     except sqlite3.IntegrityError:
@@ -669,8 +694,11 @@ def _backfill_creator_memberships(connection: sqlite3.Connection) -> None:
         if existing is not None:
             continue
         connection.execute(
-            f"""
-            INSERT INTO project_memberships ({_MEMBER_COLUMNS})
+            """
+            INSERT INTO project_memberships (
+                id, tenant_id, project_id, user_id, role, scope_policy, status,
+                created_by, updated_by, created_at, updated_at
+            )
             VALUES (?, ?, ?, ?, 'project_manager', 'project', 'active', ?, ?, ?, ?)
             """,
             (
@@ -707,6 +735,7 @@ def _member(row: sqlite3.Row) -> MembershipRow:
         updated_by=row["updated_by"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        tenant_membership_id=row["tenant_membership_id"],
     )
 
 

@@ -15,6 +15,7 @@ from app.api.records import _allowed
 from app.api.shell import get_platform_client
 from app.followups_store import QUEUE_ZONE, civil_due
 from app.platform_client import PlatformClient, TenantUserView
+from app.project_access import FEATURE_RECORDS
 from app.reminders_store import (
     build_adapter,
     email_mode,
@@ -126,7 +127,7 @@ def read_reminders(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, write=False, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     rows = list_inbox(connection, str(tenant_id), opened.user_id)
@@ -141,7 +142,7 @@ def read_failures(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, write=False, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     projects = managed_project_ids(connection, str(tenant_id), opened.user_id)
@@ -159,7 +160,7 @@ def post_process(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, write=True, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     mode = email_mode()
@@ -197,7 +198,7 @@ def post_read(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, write=True, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     row = mark_read(connection, tenant_id=str(tenant_id), user_id=opened.user_id, reminder_id=str(reminder_id))
@@ -214,7 +215,7 @@ def post_retry(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, write=True, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
     projects = managed_project_ids(connection, str(tenant_id), opened.user_id)

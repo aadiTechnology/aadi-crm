@@ -147,8 +147,9 @@ def test_kpis_match_authorized_lists_and_queue_boundaries(tmp_path, monkeypatch)
     assert _record_total(client, project_id) == 1
     assert _queue_total(client, project_id, "overdue") == 1
     assert _queue_total(client, project_id, "today") == 0
-    denied_record = client.get(base, headers=_headers(write=False))
-    assert denied_record.status_code == 404
+    opened_record = client.get(base, headers=_headers(write=False))
+    assert opened_record.status_code == 200
+    assert opened_record.json()["values"]["school_name"] == "North school"
     member_completed = client.get(_completed(project_id), headers=_headers(write=False))
     assert member_completed.json()["total"] == 0
     assert "North school" not in member_completed.text

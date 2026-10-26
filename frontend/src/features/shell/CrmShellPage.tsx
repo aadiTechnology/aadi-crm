@@ -13,7 +13,12 @@ import { LoadingSkeleton, NavIcon } from '@/ui/chrome'
 import {
   accessMessage,
   ApiError,
-  canManageProjects,
+  FEATURE_LEADS,
+  FEATURE_PROJECTS,
+  FEATURE_RECORDS,
+  canOpenProjects,
+  canOpenRecords,
+  featureEntitled,
   getLeads,
   getPermissions,
   getProductAccess,
@@ -52,6 +57,7 @@ type Screen =
       branding: ShellBranding | null
       canOpenLeads: boolean
       canOpenProjects: boolean
+      canOpenRecords: boolean
       leads: LeadsView
       signingOut: boolean
     }
@@ -66,11 +72,15 @@ function failureMessage(error: unknown): string {
 }
 
 function leadsAllowed(access: ProductAccess, permissions: string[]): boolean {
-  return access.available && permissions.includes(LEADS_PERMISSION)
+  return featureEntitled(access, FEATURE_LEADS) && permissions.includes(LEADS_PERMISSION)
 }
 
 function projectsAllowed(access: ProductAccess, permissions: string[]): boolean {
-  return access.available && canManageProjects(permissions)
+  return featureEntitled(access, FEATURE_PROJECTS) && canOpenProjects(permissions)
+}
+
+function recordsAllowed(access: ProductAccess, permissions: string[]): boolean {
+  return featureEntitled(access, FEATURE_RECORDS) && canOpenRecords(permissions)
 }
 
 function workspacePage(pathname: string): string {
@@ -213,6 +223,7 @@ export function CrmShellPage() {
         const branding = await readBranding(tenantId)
         const canOpenLeads = leadsAllowed(access, permissions)
         const canOpenProjects = projectsAllowed(access, permissions)
+        const canOpenRecords = recordsAllowed(access, permissions)
         let leads: LeadsView = { status: 'hidden' }
         if (onLeads) {
           try {
@@ -234,6 +245,7 @@ export function CrmShellPage() {
             branding,
             canOpenLeads,
             canOpenProjects,
+            canOpenRecords,
             leads,
             signingOut: false,
           })
@@ -440,7 +452,7 @@ export function CrmShellPage() {
           {screen.status === 'shell' && !screen.canOpenProjects ? (
             <p className="nav-note">Forms is not available for this sign-in.</p>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenRecords ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/records`}
@@ -450,10 +462,10 @@ export function CrmShellPage() {
               <span className="nav-label">Records</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && !screen.canOpenProjects ? (
+          {screen.status === 'shell' && !screen.canOpenRecords ? (
             <p className="nav-note">Records is not available for this sign-in.</p>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenRecords ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/imports`}
@@ -463,10 +475,10 @@ export function CrmShellPage() {
               <span className="nav-label">Import</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && !screen.canOpenProjects ? (
+          {screen.status === 'shell' && !screen.canOpenRecords ? (
             <p className="nav-note">Import is not available for this sign-in.</p>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenRecords ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/reminders`}
@@ -476,7 +488,7 @@ export function CrmShellPage() {
               <span className="nav-label">Reminders</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenRecords ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/follow-ups`}
@@ -486,7 +498,7 @@ export function CrmShellPage() {
               <span className="nav-label">Follow-ups</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenRecords ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/kpis`}
@@ -506,10 +518,10 @@ export function CrmShellPage() {
               <span className="nav-label">Audit</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && !screen.canOpenProjects ? (
+          {screen.status === 'shell' && !screen.canOpenRecords ? (
             <p className="nav-note">Reminders is not available for this sign-in.</p>
           ) : null}
-          {screen.status === 'shell' && !screen.canOpenProjects ? (
+          {screen.status === 'shell' && !screen.canOpenRecords ? (
             <p className="nav-note">Follow-ups is not available for this sign-in.</p>
           ) : null}
         </nav>
@@ -608,11 +620,11 @@ export function CrmShellPage() {
               )}
               {onProjects && screen.canOpenProjects ? <ProjectsPanel tenantId={screen.access.tenant_id} /> : null}
               {onForms && screen.canOpenProjects ? <FormsPanel tenantId={screen.access.tenant_id} /> : null}
-              {onRecords && screen.canOpenProjects ? <RecordsPanel tenantId={screen.access.tenant_id} /> : null}
-              {onImports && screen.canOpenProjects ? <ImportsPanel tenantId={screen.access.tenant_id} /> : null}
-              {onReminders && screen.canOpenProjects ? <RemindersPanel tenantId={screen.access.tenant_id} /> : null}
-              {onFollowUps && screen.canOpenProjects ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
-              {onKpis && screen.canOpenProjects ? <ReportingPanel tenantId={screen.access.tenant_id} /> : null}
+              {onRecords && screen.canOpenRecords ? <RecordsPanel tenantId={screen.access.tenant_id} /> : null}
+              {onImports && screen.canOpenRecords ? <ImportsPanel tenantId={screen.access.tenant_id} /> : null}
+              {onReminders && screen.canOpenRecords ? <RemindersPanel tenantId={screen.access.tenant_id} /> : null}
+              {onFollowUps && screen.canOpenRecords ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
+              {onKpis && screen.canOpenRecords ? <ReportingPanel tenantId={screen.access.tenant_id} /> : null}
               {onAudit && screen.canOpenProjects ? <AuditPanel tenantId={screen.access.tenant_id} /> : null}
               {onProjects && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
@@ -624,27 +636,27 @@ export function CrmShellPage() {
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onRecords && !screen.canOpenProjects ? (
+              {onRecords && !screen.canOpenRecords ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onImports && !screen.canOpenProjects ? (
+              {onImports && !screen.canOpenRecords ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onReminders && !screen.canOpenProjects ? (
+              {onReminders && !screen.canOpenRecords ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onFollowUps && !screen.canOpenProjects ? (
+              {onFollowUps && !screen.canOpenRecords ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onKpis && !screen.canOpenProjects ? (
+              {onKpis && !screen.canOpenRecords ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
