@@ -16,6 +16,7 @@ from app.db import (
     DuplicateProjectCode,
     InactiveMembership,
     LastProjectManager,
+    MissingTenantMembership,
     MembershipRow,
     ProjectRow,
     active_membership,
@@ -172,10 +173,17 @@ def _project_body(project: ProjectRow, access: ProjectAccess) -> dict[str, objec
 
 
 def _binding_matches(membership, caller: Caller) -> bool:
-    bound = membership.tenant_membership_id
-    if not bound:
-        return True
-    return bound == caller.tenant_membership_id
+    """A project role applies only to the membership id stored at grant time.
+
+    A blank binding is historical. It does not authorize the current sign-in,
+    including a person whose tenant membership was removed and created again.
+    """
+
+    bound = (membership.tenant_membership_id or "").strip()
+    current = (caller.tenant_membership_id or "").strip()
+    if not bound or not current:
+        return False
+    return bound == current
 
 
 def _access_for_user(connection, tenant_id: str, project_id: str, caller: Caller) -> ProjectAccess:
@@ -381,6 +389,8 @@ async def post_project(
     description = _description(payload.get("description", ""))
     if isinstance(description, JSONResponse):
         return description
+    if not opened.tenant_membership_id.strip():
+        return _error(403, "This sign-in is not an active member of the organization.")
     try:
         created = create_project(
             connection,
@@ -566,6 +576,8 @@ async def post_member(
     user = _lookup_user(platform, tenant_id, user_id, request)
     if isinstance(user, JSONResponse):
         return user
+    if not user.membership_id.strip():
+        return _error(422, "That user does not have an active organization membership.")
     try:
         created = grant_membership(
             connection,
@@ -578,6 +590,8 @@ async def post_member(
         )
     except DuplicateMembership:
         return _error(409, "This user is already a member of this project.")
+    except MissingTenantMembership:
+        return _error(422, "That user does not have an active organization membership.")
     if created is None:
         return _error(404)
     return JSONResponse(status_code=201, content=created.as_dict(email=user.email))

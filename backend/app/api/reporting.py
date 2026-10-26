@@ -104,7 +104,14 @@ def read_completed_follow_ups(
     visible = []
     for item in items:
         assignee = item.get("record_assignee_user_id")
-        if not _allowed(connection, str(tenant_id), str(project_id), caller, None if assignee is None else str(assignee)):
+        owns_follow_up = item.get("owner_user_id") == caller.user_id
+        if not owns_follow_up and not _allowed(
+            connection,
+            str(tenant_id),
+            str(project_id),
+            caller,
+            None if assignee is None else str(assignee),
+        ):
             continue
         shown = dict(item)
         shown.pop("record_assignee_user_id", None)

@@ -187,9 +187,11 @@ def test_follow_up_lifecycle_timeline_and_queues(tmp_path, monkeypatch) -> None:
         headers=_headers(write=False),
     )
     assert member_queue.status_code == 200
-    assert member_queue.json()["total"] == 0
+    assert member_queue.json()["total"] == 1
     assert member_queue.json()["owner_user_id"] == OTHER_ID
-    assert "Send the note" not in member_queue.text
+    assert today["id"] in {item["id"] for item in member_queue.json()["items"]}
+    assert still_due["id"] not in {item["id"] for item in member_queue.json()["items"]}
+    assert "Send the note" in member_queue.text
 
 
 def test_many_follow_ups_have_no_count_cap(tmp_path, monkeypatch) -> None:

@@ -26,6 +26,7 @@ function renderAt(path: string) {
         <Route path="/tenants/:tenantId" element={<CrmShellPage />} />
         <Route path="/tenants/:tenantId/leads" element={<CrmShellPage />} />
         <Route path="/tenants/:tenantId/records" element={<CrmShellPage />} />
+        <Route path="/tenants/:tenantId/audit" element={<CrmShellPage />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -347,6 +348,71 @@ it('uses a brand token primary and ignores text that fails on its background', a
   expect(style.getPropertyValue('--color-primary')).toBe('#ABCDEF')
   expect(style.getPropertyValue('--color-bg')).toBe('')
   expect(style.getPropertyValue('--color-text')).toBe('')
+})
+
+it('shows Audit only when audit.read is granted', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true, TENANT, ['lead_management']))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.project_management.access'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    if (url.includes('/audit-events')) {
+      return json({ items: [{ summary: 'Hidden event' }] })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/audit`)
+  expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to perform this action.')
+  expect(screen.queryByRole('link', { name: 'Audit' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Hidden event')).not.toBeInTheDocument()
+
+  cleanup()
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true, TENANT, ['lead_management']))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['audit.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    if (url.includes('/audit-events')) {
+      return json({
+        items: [
+          {
+            id: 'event-1',
+            occurred_at: '2026-10-21T04:00:00+00:00',
+            action: 'project.settings.update',
+            resource_type: 'project',
+            resource_id: '33333333-3333-4333-8333-333333333333',
+            summary: 'Visible event',
+            outcome: 'success',
+            actor_user_id: 'user-1',
+          },
+        ],
+        limit: 50,
+        source: 'platform',
+      })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/audit`)
+  expect(await screen.findByRole('link', { name: 'Audit' })).toBeInTheDocument()
+  expect(await screen.findByText('Visible event')).toBeInTheDocument()
 })
 
 function shellStyle(): CSSStyleDeclaration {

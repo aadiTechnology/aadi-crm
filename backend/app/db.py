@@ -39,6 +39,10 @@ class InactiveMembership(Exception):
     """The membership row is not active."""
 
 
+class MissingTenantMembership(Exception):
+    """A project grant needs the member's current Control Plane membership id."""
+
+
 @dataclass(frozen=True)
 class ProjectRow:
     id: str
@@ -577,8 +581,21 @@ def grant_membership(
 ) -> MembershipRow | None:
     if get_project(connection, tenant_id, project_id) is None:
         return None
-    if active_membership(connection, tenant_id, project_id, user_id) is not None:
-        raise DuplicateMembership
+    if tenant_membership_id is None or not str(tenant_membership_id).strip():
+        raise MissingTenantMembership
+    existing = active_membership(connection, tenant_id, project_id, user_id)
+    if existing is not None:
+        if existing.tenant_membership_id == tenant_membership_id:
+            raise DuplicateMembership
+        return _rebind_membership(
+            connection,
+            current=existing,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            role=role,
+            actor_id=actor_id,
+            tenant_membership_id=tenant_membership_id,
+        )
     scope = _scope_for_role(role)
     membership_id = str(uuid4())
     now = _now()
@@ -610,6 +627,38 @@ def grant_membership(
     if created is None:
         raise RuntimeError("The membership insert did not persist.")
     return created
+
+
+def _rebind_membership(
+    connection: sqlite3.Connection,
+    *,
+    current: MembershipRow,
+    tenant_id: str,
+    project_id: str,
+    role: str,
+    actor_id: str,
+    tenant_membership_id: str,
+) -> MembershipRow | None:
+    """Attach an explicit grant to the member's current Control Plane membership.
+
+    A blank binding never authorizes a request. A different membership id does
+    not restore the old role until a project manager grants it again.
+    """
+
+    if current.role == "project_manager" and role != "project_manager":
+        if count_active_managers(connection, tenant_id, project_id) <= 1:
+            raise LastProjectManager
+    scope = _scope_for_role(role)
+    connection.execute(
+        """
+        UPDATE project_memberships
+        SET role = ?, scope_policy = ?, tenant_membership_id = ?, updated_by = ?, updated_at = ?
+        WHERE tenant_id = ? AND project_id = ? AND id = ? AND status = 'active'
+        """,
+        (role, scope, tenant_membership_id, actor_id, _now(), tenant_id, project_id, current.id),
+    )
+    connection.commit()
+    return get_project_membership(connection, tenant_id, project_id, current.id)
 
 
 def set_membership_role(

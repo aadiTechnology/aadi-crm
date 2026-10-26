@@ -21,6 +21,7 @@ PROJECT_ACCESS = "crm.project_management.access"
 RECORDS_ACCESS = "crm.records.access"
 MANAGE = "crm.project_management.manage"
 MODULE_KEYS = [LEADS, PROJECT_ACCESS, RECORDS_ACCESS]
+MEMBERSHIP_ID = "abababab-abab-4aba-8aba-abababababab"
 
 
 class FakePlatform:
@@ -97,7 +98,7 @@ def _access(
     available: bool = True,
     name: str = "Aadi Technology",
     features: tuple[str, ...] = ("lead_management", "project_management", "records"),
-    membership_id: str = "",
+    membership_id: str = MEMBERSHIP_ID,
 ) -> ProductAccessView:
     return ProductAccessView(
         tenant_id=str(tenant_id),
@@ -432,7 +433,7 @@ def _person(
     *,
     active: bool = True,
     status: str = "active",
-    membership_id: str = "",
+    membership_id: str = MEMBERSHIP_ID,
 ) -> TenantUserView:
     return TenantUserView(
         user_id=user_id,
@@ -520,6 +521,24 @@ def test_record_scope_contract_denies_non_members() -> None:
     assert stranger_decision.allowed is False
 
 
+def test_blank_database_starts_with_membership_binding(tmp_path) -> None:
+    path = tmp_path / "blank.sqlite"
+    apply_migrations(path)
+    apply_migrations(path)
+    connection = connect(path)
+    versions = [
+        row["version"]
+        for row in connection.execute("SELECT version FROM crm_schema_migrations ORDER BY version")
+    ]
+    assert "009_project_membership_binding.sql" not in versions
+    assert versions[0] == "001_projects.sql"
+    assert "002_project_memberships.sql" in versions
+    assert "008_imports.sql" in versions
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(project_memberships)")}
+    assert "tenant_membership_id" in columns
+    connection.close()
+
+
 def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
     from pathlib import Path
 
@@ -565,7 +584,6 @@ def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
         "006_followups.sql",
         "007_reminders.sql",
         "008_imports.sql",
-        "009_project_membership_binding.sql",
     ]
     assert connection.execute("SELECT COUNT(*) AS count FROM reminder_deliveries").fetchone()["count"] == 0
     assert connection.execute("SELECT COUNT(*) AS count FROM import_jobs").fetchone()["count"] == 0
@@ -784,7 +802,12 @@ def test_project_membership_roles_and_scope(tmp_path, monkeypatch) -> None:
     assert refused.status_code == 403
     assert len(platform.user_lookups) >= lookups_before_directory_block
     connection = connect(database_path())
-    manager = Caller(user_id=OTHER_ID, email="other@example.com", keys=[LEADS])
+    manager = Caller(
+        user_id=OTHER_ID,
+        email="other@example.com",
+        keys=[LEADS],
+        tenant_membership_id=MEMBERSHIP_ID,
+    )
     assigned_record = RecordRef(tenant_id=str(TENANT_A), project_id=project_id, assignee_user_id=USER_ID)
     allowed = authorize_record(
         connection,
@@ -795,7 +818,12 @@ def test_project_membership_roles_and_scope(tmp_path, monkeypatch) -> None:
     )
     assert allowed.allowed is True
     assert allowed.scope == "project"
-    removed_caller = Caller(user_id=USER_ID, email="manager@example.com", keys=[LEADS])
+    removed_caller = Caller(
+        user_id=USER_ID,
+        email="manager@example.com",
+        keys=[LEADS],
+        tenant_membership_id=MEMBERSHIP_ID,
+    )
     blocked = authorize_record(
         connection,
         tenant_id=str(TENANT_A),
@@ -924,14 +952,15 @@ def test_a_replaced_tenant_membership_does_not_restore_the_project_role(tmp_path
         f"/api/v1/tenants/{TENANT_A}/projects/{legacy.id}",
         headers=_headers(write=False),
     )
-    assert kept.status_code == 200
-    assert kept.json()["name"] == "Legacy North"
+    assert kept.status_code == 404
+    assert "Legacy North" not in kept.text
 
     platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=replacement_membership)
     hidden = client.get(f"/api/v1/tenants/{TENANT_A}/projects", headers=_headers(write=False))
     assert hidden.status_code == 200
-    assert [item["id"] for item in hidden.json()["items"]] == [legacy.id]
+    assert hidden.json()["items"] == []
     assert "Bound North" not in hidden.text
+    assert "Legacy North" not in hidden.text
     denied = client.get(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
         headers=_headers(write=False),
@@ -958,6 +987,61 @@ def test_a_replaced_tenant_membership_does_not_restore_the_project_role(tmp_path
         headers=_headers(write=False),
     )
     assert member_kept.status_code == 200
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=caller_membership)
+    _become(platform, USER_ID, "manager@example.com")
+    restored_again = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert restored_again.status_code == 200
+
+
+def test_unbound_project_role_is_restored_only_by_an_explicit_grant(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A, [PROJECT_ACCESS, MANAGE])
+    platform.users_by_tenant[str(TENANT_A)] = [_person(USER_ID, "manager@example.com")]
+    client = _client(tmp_path, monkeypatch, platform)
+    created = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects",
+        headers=_headers(write=True),
+        json={"code": "N-1", "name": "Bound North"},
+    )
+    project_id = created.json()["id"]
+    connection = connect(database_path())
+    connection.execute(
+        "UPDATE project_memberships SET tenant_membership_id = NULL WHERE project_id = ?",
+        (project_id,),
+    )
+    connection.commit()
+    connection.close()
+    platform.permissions_by_tenant[str(TENANT_A)] = [PROJECT_ACCESS]
+    denied = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert denied.status_code == 404
+    assert "Bound North" not in denied.text
+    platform.permissions_by_tenant[str(TENANT_A)] = [MANAGE]
+    rebound = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": USER_ID, "role": "project_manager"},
+    )
+    assert rebound.status_code == 201
+    connection = connect(database_path())
+    stored = connection.execute(
+        "SELECT tenant_membership_id FROM project_memberships WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    connection.close()
+    assert stored["tenant_membership_id"] == MEMBERSHIP_ID
+    platform.permissions_by_tenant[str(TENANT_A)] = [PROJECT_ACCESS]
+    opened = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}",
+        headers=_headers(write=False),
+    )
+    assert opened.status_code == 200
+    assert opened.json()["name"] == "Bound North"
 
 
 def test_eligible_users_come_from_the_product_member_list(tmp_path, monkeypatch) -> None:

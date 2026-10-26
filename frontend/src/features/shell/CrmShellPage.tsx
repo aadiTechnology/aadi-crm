@@ -16,6 +16,7 @@ import {
   FEATURE_LEADS,
   FEATURE_PROJECTS,
   FEATURE_RECORDS,
+  canOpenAudit,
   canOpenProjects,
   canOpenRecords,
   featureEntitled,
@@ -58,6 +59,7 @@ type Screen =
       canOpenLeads: boolean
       canOpenProjects: boolean
       canOpenRecords: boolean
+      canOpenAudit: boolean
       leads: LeadsView
       signingOut: boolean
     }
@@ -81,6 +83,10 @@ function projectsAllowed(access: ProductAccess, permissions: string[]): boolean 
 
 function recordsAllowed(access: ProductAccess, permissions: string[]): boolean {
   return featureEntitled(access, FEATURE_RECORDS) && canOpenRecords(permissions)
+}
+
+function auditAllowed(access: ProductAccess, permissions: string[]): boolean {
+  return access.available && canOpenAudit(permissions)
 }
 
 function workspacePage(pathname: string): string {
@@ -224,6 +230,7 @@ export function CrmShellPage() {
         const canOpenLeads = leadsAllowed(access, permissions)
         const canOpenProjects = projectsAllowed(access, permissions)
         const canOpenRecords = recordsAllowed(access, permissions)
+        const canOpenAudit = auditAllowed(access, permissions)
         let leads: LeadsView = { status: 'hidden' }
         if (onLeads) {
           try {
@@ -246,6 +253,7 @@ export function CrmShellPage() {
             canOpenLeads,
             canOpenProjects,
             canOpenRecords,
+            canOpenAudit,
             leads,
             signingOut: false,
           })
@@ -508,7 +516,7 @@ export function CrmShellPage() {
               <span className="nav-label">KPIs</span>
             </Link>
           ) : null}
-          {screen.status === 'shell' && screen.canOpenProjects ? (
+          {screen.status === 'shell' && screen.canOpenAudit ? (
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}/audit`}
@@ -625,7 +633,7 @@ export function CrmShellPage() {
               {onReminders && screen.canOpenRecords ? <RemindersPanel tenantId={screen.access.tenant_id} /> : null}
               {onFollowUps && screen.canOpenRecords ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
               {onKpis && screen.canOpenRecords ? <ReportingPanel tenantId={screen.access.tenant_id} /> : null}
-              {onAudit && screen.canOpenProjects ? <AuditPanel tenantId={screen.access.tenant_id} /> : null}
+              {onAudit && screen.canOpenAudit ? <AuditPanel tenantId={screen.access.tenant_id} /> : null}
               {onProjects && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
@@ -661,7 +669,7 @@ export function CrmShellPage() {
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onAudit && !screen.canOpenProjects ? (
+              {onAudit && !screen.canOpenAudit ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>

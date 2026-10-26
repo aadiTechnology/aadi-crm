@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS project_memberships (
     updated_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    tenant_membership_id TEXT,
     FOREIGN KEY (project_id) REFERENCES projects (id),
     CHECK (
         (role = 'project_manager' AND scope_policy = 'project')

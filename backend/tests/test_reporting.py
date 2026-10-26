@@ -134,11 +134,11 @@ def test_kpis_match_authorized_lists_and_queue_boundaries(tmp_path, monkeypatch)
         {"form_id": member_form, "form_name": "Hiring desk", "count": 1}
     ]
     assert member_body["follow_ups"]["overdue"] == 1
-    assert member_body["follow_ups"]["today"] == 0
+    assert member_body["follow_ups"]["today"] == 1
     assert member_body["follow_ups"]["upcoming"] == 0
     assert member_body["follow_ups"]["completed"] == 0
     assert member_body["follow_ups"]["by_owner"] == [
-        {"owner_user_id": OTHER_ID, "overdue": 1, "today": 0, "upcoming": 0}
+        {"owner_user_id": OTHER_ID, "overdue": 1, "today": 1, "upcoming": 0}
     ]
     assert "North school" not in member_report.text
     assert "Site enquiry" not in member_report.text
@@ -146,7 +146,13 @@ def test_kpis_match_authorized_lists_and_queue_boundaries(tmp_path, monkeypatch)
     assert USER_ID not in member_report.text
     assert _record_total(client, project_id) == 1
     assert _queue_total(client, project_id, "overdue") == 1
-    assert _queue_total(client, project_id, "today") == 0
+    assert _queue_total(client, project_id, "today") == 1
+    today_queue = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/follow-ups?queue=today",
+        headers=_headers(write=False),
+    )
+    assert hidden["id"] in {item["id"] for item in today_queue.json()["items"]}
+    assert "North today" not in today_queue.text
     opened_record = client.get(base, headers=_headers(write=False))
     assert opened_record.status_code == 200
     assert opened_record.json()["values"]["school_name"] == "North school"

@@ -288,8 +288,6 @@ def _follow_scope(
     if assignee_user_id is not None:
         clauses.append("follow_ups.owner_user_id = ?")
         params.append(assignee_user_id)
-        clauses.append("records.assignee_user_id = ?")
-        params.append(assignee_user_id)
     return clauses, params
 
 

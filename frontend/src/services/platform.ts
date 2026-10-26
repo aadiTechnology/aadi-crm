@@ -6,6 +6,7 @@ export const LEADS_PERMISSION = 'crm.lead_management.read'
 export const PROJECT_ACCESS_PERMISSION = 'crm.project_management.access'
 export const RECORDS_ACCESS_PERMISSION = 'crm.records.access'
 export const PROJECT_MANAGE_PERMISSION = 'crm.project_management.manage'
+export const AUDIT_PERMISSION = 'audit.read'
 export const FEATURE_LEADS = 'lead_management'
 export const FEATURE_PROJECTS = 'project_management'
 export const FEATURE_RECORDS = 'records'
@@ -32,6 +33,10 @@ export function canOpenRecords(permissions: string[]): boolean {
   return (
     permissions.includes(PROJECT_MANAGE_PERMISSION) || permissions.includes(RECORDS_ACCESS_PERMISSION)
   )
+}
+
+export function canOpenAudit(permissions: string[]): boolean {
+  return permissions.includes(AUDIT_PERMISSION)
 }
 
 export function featureEntitled(access: ProductAccess, key: string): boolean {

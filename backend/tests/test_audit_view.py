@@ -1,6 +1,18 @@
 """The CRM audit view reads the platform log and does not store a copy."""
 
-from tests.test_projects import TENANT_A, TENANT_B, USER_ID, FakePlatform, _allow, _client, _headers
+from tests.test_projects import (
+    MODULE_KEYS,
+    TENANT_A,
+    TENANT_B,
+    USER_ID,
+    FakePlatform,
+    _access,
+    _allow,
+    _client,
+    _headers,
+)
+
+AUDIT = "audit.read"
 from app.platform_client import PlatformCallError
 
 
@@ -22,10 +34,31 @@ def _event(event_id: str, *, summary: str = "Project settings were updated.") ->
     }
 
 
+def _permit_audit(platform: FakePlatform, tenant_id) -> None:
+    _allow(platform, tenant_id, [*MODULE_KEYS, AUDIT])
+
+
+def test_project_access_without_audit_read_does_not_open_the_log(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _allow(platform, TENANT_A, [MODULE_KEYS[1]])
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, features=("lead_management",))
+    platform.audit_by_tenant[str(TENANT_A)] = [_event("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")]
+    client = _client(tmp_path, monkeypatch, platform)
+    denied = client.get(f"/api/v1/tenants/{TENANT_A}/audit-events", headers=_headers(write=False))
+    assert denied.status_code == 403
+    assert platform.audit_calls == []
+    assert "Project settings" not in denied.text
+    platform.permissions_by_tenant[str(TENANT_A)] = [AUDIT]
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, features=("lead_management",))
+    opened = client.get(f"/api/v1/tenants/{TENANT_A}/audit-events", headers=_headers(write=False))
+    assert opened.status_code == 200
+    assert opened.json()["items"][0]["summary"] == "Project settings were updated."
+
+
 def test_audit_view_strips_metadata_and_rejects_unsupported_filters(tmp_path, monkeypatch) -> None:
     platform = FakePlatform()
-    _allow(platform, TENANT_A)
-    _allow(platform, TENANT_B)
+    _permit_audit(platform, TENANT_A)
+    _permit_audit(platform, TENANT_B)
     platform.audit_by_tenant[str(TENANT_A)] = [
         _event("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"),
         _event("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", summary="A second event."),
@@ -80,7 +113,7 @@ def test_audit_view_strips_metadata_and_rejects_unsupported_filters(tmp_path, mo
 
 def test_audit_view_failure_empty_and_permission(tmp_path, monkeypatch) -> None:
     platform = FakePlatform()
-    _allow(platform, TENANT_A)
+    _permit_audit(platform, TENANT_A)
     client = _client(tmp_path, monkeypatch, platform)
 
     empty = client.get(f"/api/v1/tenants/{TENANT_A}/audit-events", headers=_headers(write=False))

@@ -364,7 +364,7 @@ def read_queue(
     record_assignee: str | None
     if access.record_scope() == SCOPE_ASSIGNED:
         owner = caller.user_id
-        record_assignee = caller.user_id
+        record_assignee = None
     else:
         record_assignee = None
         if owner_user_id:
@@ -387,7 +387,15 @@ def read_queue(
     )
     visible = []
     for item in items:
-        if not _allowed(connection, str(tenant_id), str(project_id), caller, str(item["record_assignee_user_id"])):
+        if not _allowed(
+            connection,
+            str(tenant_id),
+            str(project_id),
+            caller,
+            str(item["record_assignee_user_id"]),
+            str(item["record_id"]),
+            include_follow_up_owner=True,
+        ):
             continue
         shown = dict(item)
         shown.pop("record_assignee_user_id", None)
