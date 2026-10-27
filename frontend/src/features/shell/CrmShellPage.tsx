@@ -120,6 +120,72 @@ function workspacePage(pathname: string): string {
   return 'Overview'
 }
 
+function formatLeadWhen(value: string | null): string {
+  if (!value) {
+    return 'None open'
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString()
+}
+
+function LeadsSection({
+  tenantId,
+  leads,
+  canOpenRecords,
+}: {
+  tenantId: string
+  leads: LeadsStub
+  canOpenRecords: boolean
+}) {
+  return (
+    <section className="stack" aria-labelledby="leads-heading">
+      <h2 id="leads-heading">Leads</h2>
+      <p className="page-intro">
+        Leads are the project records you can open. Status comes from the record. The next follow-up is the earliest
+        open follow-up.
+      </p>
+      {leads.items.length === 0 ? <p>No leads are visible with your current access.</p> : null}
+      {leads.items.length > 0 ? (
+        <div className="table-wrap">
+          <table className="data-table" aria-labelledby="leads-heading">
+            <thead>
+              <tr>
+                <th scope="col">Record</th>
+                <th scope="col">Project</th>
+                <th scope="col">Status</th>
+                <th scope="col">Assignee</th>
+                <th scope="col">Next follow-up</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <Link to={`/tenants/${tenantId}/records/${item.project_id}/${item.id}`}>{item.public_number}</Link>
+                    <div>{item.display_name}</div>
+                  </td>
+                  <td>{item.project_name}</td>
+                  <td>{item.status_value ? `${item.status_label}: ${item.status_value}` : 'Not on this form'}</td>
+                  <td>{item.assignee_email ?? 'Assigned member'}</td>
+                  <td>{formatLeadWhen(item.next_follow_up_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {canOpenRecords ? (
+        <p>
+          <Link to={`/tenants/${tenantId}/records`}>Open records</Link> to add or edit a lead.
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
 export function CrmShellPage() {
   const { tenantId } = useParams()
   const location = useLocation()
@@ -674,11 +740,12 @@ export function CrmShellPage() {
                   You do not have permission to perform this action.
                 </p>
               ) : null}
-              {onLeads && screen.leads.status === 'ready' ? (
-                <section className="stack" aria-labelledby="leads-heading">
-                  <h2 id="leads-heading">Leads</h2>
-                  {screen.leads.leads.items.length === 0 ? <p>No leads are open in this shell.</p> : null}
-                </section>
+              {onLeads && screen.canOpenLeads && screen.leads.status === 'ready' ? (
+                <LeadsSection
+                  tenantId={tenantId ?? ''}
+                  leads={screen.leads.leads}
+                  canOpenRecords={screen.canOpenRecords}
+                />
               ) : null}
               {onLeads && (screen.leads.status === 'denied' || screen.leads.status === 'error') ? (
                 <p role="alert" className="alert alert-error">

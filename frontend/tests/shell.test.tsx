@@ -278,6 +278,83 @@ it('shows leads only after both checks and an empty stub', async () => {
   expect(shellStyle().getPropertyValue('--color-primary')).toBe('#0f766e')
 })
 
+it('shows an empty leads list without pretending the shell has no records', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read', 'crm.records.access'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({ profile: { display_name: 'Aadi Studio' }, branding: {} })
+    }
+    if (url.includes('/leads')) {
+      return json({ module: 'leads', items: [] })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/leads`)
+  expect(await screen.findByText('No leads are visible with your current access.')).toBeInTheDocument()
+  expect(screen.queryByText('No leads are open in this shell.')).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Open records' })).toHaveAttribute('href', `/tenants/${TENANT}/records`)
+})
+
+it('lists authorized project records on the leads page', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read', 'crm.records.access'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({ profile: { display_name: 'Aadi Studio' }, branding: {} })
+    }
+    if (url.includes('/leads')) {
+      return json({
+        module: 'leads',
+        items: [
+          {
+            id: 'rec-1',
+            project_id: 'proj-1',
+            project_name: 'Preschool',
+            project_code: 'PRESCHOOL',
+            public_number: 'PRESCHOOL-0001',
+            display_name: 'Northside Learning Circle',
+            source: 'manual',
+            source_label: 'Manual',
+            assignee_user_id: 'user-1',
+            assignee_email: 'crm.admin@example.test',
+            status_label: 'Priority',
+            status_value: 'Hot',
+            next_follow_up_at: '2026-11-20T04:30:00.000000+00:00',
+            updated_at: '2026-10-01T00:00:00.000000+00:00',
+          },
+        ],
+      })
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/leads`)
+  expect(await screen.findByText('Northside Learning Circle')).toBeInTheDocument()
+  expect(screen.getByText('Preschool')).toBeInTheDocument()
+  expect(screen.getByText('Priority: Hot')).toBeInTheDocument()
+  expect(screen.getByText('crm.admin@example.test')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'PRESCHOOL-0001' })).toHaveAttribute(
+    'href',
+    `/tenants/${TENANT}/records/proj-1/rec-1`,
+  )
+})
+
 it('lets branding colors win over brand tokens and keeps an unreadable pair off the shell', async () => {
   asFetch().mockImplementation((input: RequestInfo | URL) => {
     const url = String(input)

@@ -77,9 +77,26 @@ export type ShellBranding = {
   faviconUrl: string | null
 }
 
+export type LeadItem = {
+  id: string
+  project_id: string
+  project_name: string
+  project_code: string
+  public_number: string
+  display_name: string
+  source: string
+  source_label: string
+  assignee_user_id: string
+  assignee_email: string | null
+  status_label: string | null
+  status_value: string | null
+  next_follow_up_at: string | null
+  updated_at: string
+}
+
 export type LeadsStub = {
   module: string
-  items: unknown[]
+  items: LeadItem[]
 }
 
 export type ProjectRole = 'project_manager' | 'project_member'
@@ -871,6 +888,23 @@ export function updateRecord(
     method: 'PATCH',
     headers: mutationHeaders(),
     body: JSON.stringify(input),
+  })
+}
+
+export function assignRecord(
+  tenantId: string,
+  projectId: string,
+  recordId: string,
+  assigneeUserId: string,
+  expectedUpdatedAt: string,
+): Promise<CrmRecord> {
+  return request<CrmRecord>(crmUrl(), `${recordPath(tenantId, projectId, recordId)}/assign`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({
+      assignee_user_id: assigneeUserId,
+      expected_updated_at: expectedUpdatedAt,
+    }),
   })
 }
 

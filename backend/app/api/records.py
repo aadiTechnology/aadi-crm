@@ -12,8 +12,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.api.projects import _body, _error, _load_project, _open_module, authorize_record, get_connection
+from app.api.projects import _body, _error, _load_project, _lookup_user, _open_module, _user_id, authorize_record, get_connection
 from app.api.shell import get_platform_client
+from app.db import active_membership
 from app.platform_client import PlatformClient
 from app.project_access import FEATURE_RECORDS, SCOPE_ASSIGNED, RecordRef
 from app.records_store import (
@@ -23,6 +24,7 @@ from app.records_store import (
     StaleRecord,
     UnpublishedForm,
     archive_record,
+    assign_record,
     create_record,
     get_record,
     list_records,
@@ -299,6 +301,64 @@ async def patch_record(
     except RecordValidation as exc:
         return _validation(exc.message, exc.fields)
     if updated is None or updated["form_version_id"] != version_id:
+        return _error(404)
+    return JSONResponse(status_code=200, content=updated)
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/records/{record_id}/assign")
+async def post_assign_record(
+    tenant_id: UUID,
+    project_id: UUID,
+    record_id: UUID,
+    request: Request,
+    platform: Annotated[PlatformClient, Depends(get_platform_client)],
+    connection: Annotated[object, Depends(get_connection)],
+) -> JSONResponse:
+    opened = _open(tenant_id, project_id, request, platform, connection, write=True)
+    if isinstance(opened, JSONResponse):
+        return opened
+    caller, (project, access) = opened
+    archived = _archived(project)
+    if archived is not None:
+        return archived
+    current = get_record(connection, str(tenant_id), str(project_id), str(record_id))
+    if current is None:
+        return _error(404)
+    if not _allowed(connection, str(tenant_id), str(project_id), caller, str(current["assignee_user_id"])):
+        return _error(404)
+    if not access.allows("add_member"):
+        return _error(403)
+    payload = await _body(request)
+    if isinstance(payload, JSONResponse):
+        return payload
+    if not set(payload).issubset({"assignee_user_id", "expected_updated_at"}):
+        return _validation("Request validation failed.")
+    expected = payload.get("expected_updated_at")
+    if not isinstance(expected, str) or not expected.strip():
+        return _validation("Reload this record before saving.")
+    assignee = _user_id(payload.get("assignee_user_id", ""))
+    if isinstance(assignee, JSONResponse):
+        return assignee
+    user = _lookup_user(platform, tenant_id, assignee, request)
+    if isinstance(user, JSONResponse):
+        return user
+    membership = active_membership(connection, str(tenant_id), str(project_id), assignee)
+    bound = "" if membership is None else (membership.tenant_membership_id or "").strip()
+    if membership is None or not bound or bound != user.membership_id.strip():
+        return _validation("Choose an active project member.")
+    try:
+        updated = assign_record(
+            connection,
+            tenant_id=str(tenant_id),
+            project_id=str(project_id),
+            record_id=str(record_id),
+            actor_id=caller.user_id,
+            assignee_user_id=assignee,
+            expected_updated_at=expected,
+        )
+    except StaleRecord as exc:
+        return _error(409, exc.message)
+    if updated is None:
         return _error(404)
     return JSONResponse(status_code=200, content=updated)
 

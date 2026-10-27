@@ -353,6 +353,53 @@ def update_record(
     return get_record(connection, tenant_id, project_id, record_id)
 
 
+def assign_record(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    project_id: str,
+    record_id: str,
+    actor_id: str,
+    assignee_user_id: str,
+    expected_updated_at: str,
+) -> dict[str, object] | None:
+    """Change the record assignee. Values and the form version stay as stored."""
+
+    previous = connection.isolation_level
+    connection.isolation_level = None
+    try:
+        begin_immediate(connection)
+        try:
+            row = connection.execute(
+                """
+                SELECT updated_at FROM records
+                WHERE tenant_id = ? AND project_id = ? AND id = ? AND deleted_at IS NULL
+                """,
+                (tenant_id, project_id, record_id),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                return None
+            if row["updated_at"] != expected_updated_at:
+                raise StaleRecord
+            now = _now()
+            connection.execute(
+                """
+                UPDATE records
+                SET assignee_user_id = ?, updated_by = ?, updated_at = ?
+                WHERE tenant_id = ? AND project_id = ? AND id = ? AND deleted_at IS NULL
+                """,
+                (assignee_user_id, actor_id, now, tenant_id, project_id, record_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    finally:
+        connection.isolation_level = previous
+    return get_record(connection, tenant_id, project_id, record_id)
+
+
 def archive_record(
     connection: sqlite3.Connection,
     *,

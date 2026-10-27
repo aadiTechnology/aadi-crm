@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -153,6 +155,23 @@ def connect_sqlite(path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+@contextmanager
+def open_database() -> Iterator[object]:
+    """Open the CRM database selected by the environment and close it afterwards."""
+
+    target = resolve_database()
+    if target.dialect == "sqlite":
+        assert target.path is not None
+        apply_migrations(target.path)
+        connection = connect_sqlite(target.path)
+    else:
+        connection = connect()
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def connect_postgres(target: DatabaseTarget):

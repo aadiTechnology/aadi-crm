@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -186,6 +186,12 @@ it('creates a record from the published version and keeps that label on the deta
     }
     if (url.pathname.endsWith(`/records/${RECORD_ID}`) && method === 'GET') {
       return json(record())
+    }
+    if (url.pathname.endsWith('/members') && method === 'GET') {
+      return json({ items: [], directory_available: true })
+    }
+    if (url.pathname.endsWith('/follow-ups') || url.pathname.endsWith('/activities')) {
+      return json({ items: [], total: 0, limit: 25, offset: 0 })
     }
     return json({ error: { message: 'Unexpected request' } }, 500)
   })
@@ -437,9 +443,63 @@ it('hides record editing when follow-up access opens another assignee record', a
   expect(await screen.findByRole('heading', { name: 'N-1-0001' })).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'Edit record' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Archive record' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Assign record' })).not.toBeInTheDocument()
   cleanup()
 
   renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}/${RECORD_ID}/edit`)
   expect(await screen.findByText('Follow-up access can open this record. It does not allow editing it.')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Save record' })).not.toBeInTheDocument()
+})
+
+it('lets a project manager assign a record to an active member', async () => {
+  const user = userEvent.setup()
+  const member = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  let assignee = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  let updatedAt = '2026-10-20T10:00:00.000Z'
+  asFetch().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost')
+    const method = init?.method ?? 'GET'
+    if (url.pathname.endsWith(`/projects/${PROJECT_ID}`) && method === 'GET') {
+      return json(project())
+    }
+    if (url.pathname.endsWith(`/records/${RECORD_ID}`) && method === 'GET') {
+      return json({ ...record(), assignee_user_id: assignee, updated_at: updatedAt })
+    }
+    if (url.pathname.endsWith('/members') && method === 'GET') {
+      return json({
+        directory_available: true,
+        items: [
+          {
+            id: 'm1',
+            user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            email: 'manager@example.com',
+            status: 'active',
+          },
+          { id: 'm2', user_id: member, email: 'member@example.com', status: 'active' },
+          { id: 'm3', user_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', email: 'removed@example.com', status: 'removed' },
+        ],
+      })
+    }
+    if (url.pathname.endsWith('/follow-ups') || url.pathname.endsWith('/activities')) {
+      return json({ items: [], total: 0, limit: 25, offset: 0 })
+    }
+    if (url.pathname.endsWith('/assign') && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { assignee_user_id: string; expected_updated_at: string }
+      expect(body.assignee_user_id).toBe(member)
+      expect(body.expected_updated_at).toBe('2026-10-20T10:00:00.000Z')
+      assignee = body.assignee_user_id
+      updatedAt = '2026-10-20T11:00:00.000Z'
+      return json({ ...record(), assignee_user_id: assignee, updated_at: updatedAt })
+    }
+    return json({ error: { message: 'Unexpected request' } }, 500)
+  })
+
+  renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}/${RECORD_ID}`)
+  const assigneeSelect = await screen.findByLabelText('Assignee')
+  expect(await within(assigneeSelect).findByRole('option', { name: 'member@example.com' })).toBeInTheDocument()
+  expect(within(assigneeSelect).queryByRole('option', { name: 'removed@example.com' })).not.toBeInTheDocument()
+  await user.selectOptions(assigneeSelect, member)
+  await user.click(screen.getByRole('button', { name: 'Assign record' }))
+  const updated = await screen.findByLabelText('Assignee')
+  expect(within(updated).getByRole('option', { name: 'member@example.com', selected: true })).toBeInTheDocument()
 })

@@ -111,6 +111,7 @@ def _access(
 
 
 def _client(tmp_path, monkeypatch, platform: FakePlatform) -> TestClient:
+    monkeypatch.delenv("CRM_DATABASE_URL", raising=False)
     monkeypatch.setenv("CRM_DATABASE_PATH", str(tmp_path / "projects.sqlite"))
     application = create_app()
     application.dependency_overrides[get_platform_client] = lambda: platform

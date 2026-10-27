@@ -7,12 +7,14 @@ import { EmptyState, LoadingSkeleton } from '@/ui/chrome'
 import {
   ApiError,
   archiveRecord,
+  assignRecord,
   createRecord,
   getFormVersion,
   getProject,
   getRecord,
   me,
   listForms,
+  listProjectMembers,
   listProjects,
   exportRecords,
   listRecords,
@@ -21,6 +23,7 @@ import {
   type FormDefinition,
   type FormVersion,
   type Project,
+  type ProjectMembership,
   type RecordListItem,
   type RecordQuery,
   type RecordValue,
@@ -855,6 +858,15 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
           <p>Source {record.source_label}.</p>
           <p>Created {formatWhen(record.created_at)}.</p>
           <p>Updated {formatWhen(record.updated_at)}.</p>
+          {project?.access.can_manage_members && !archived ? (
+            <AssignRecord
+              key={record.updated_at}
+              tenantId={tenantId}
+              projectId={projectId}
+              record={record}
+              onAssigned={setRecord}
+            />
+          ) : null}
           {archived ? <p>This project is archived. This record can still be read.</p> : null}
           {record.fields.map((field) => (
             <div key={field.field_key}>
@@ -891,6 +903,82 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
         </>
       ) : null}
     </section>
+  )
+}
+
+function AssignRecord({
+  tenantId,
+  projectId,
+  record,
+  onAssigned,
+}: {
+  tenantId: string
+  projectId: string
+  record: CrmRecord
+  onAssigned: (record: CrmRecord) => void
+}) {
+  const [members, setMembers] = useState<ProjectMembership[]>([])
+  const [assignee, setAssignee] = useState(record.assignee_user_id ?? '')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    listProjectMembers(tenantId, projectId)
+      .then((page) => {
+        if (!cancelled) {
+          setMembers(page.items.filter((item) => item.status === 'active'))
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setError(messageFrom(caught))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tenantId, projectId])
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (submitting) {
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const saved = await assignRecord(tenantId, projectId, record.id, assignee, record.updated_at)
+      onAssigned(saved)
+    } catch (caught) {
+      setError(messageFrom(caught))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form className="stack" onSubmit={(event) => void onSubmit(event)}>
+      <label htmlFor="record-assignee">Assignee</label>
+      <select id="record-assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+        {record.assignee_user_id && !members.some((item) => item.user_id === record.assignee_user_id) ? (
+          <option value={record.assignee_user_id}>Current assignee</option>
+        ) : null}
+        {members.map((item) => (
+          <option key={item.id} value={item.user_id}>
+            {item.email ?? item.user_id}
+          </option>
+        ))}
+      </select>
+      <button type="submit" disabled={submitting || members.length === 0}>
+        {submitting ? 'Assigning record' : 'Assign record'}
+      </button>
+      {error ? (
+        <p role="alert" className="alert alert-error">
+          {error}
+        </p>
+      ) : null}
+    </form>
   )
 }
 
