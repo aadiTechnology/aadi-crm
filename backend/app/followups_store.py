@@ -153,12 +153,20 @@ def list_follow_ups(
     task_type: str,
     limit: int,
     offset: int,
+    owner_user_id: str | None = None,
+    status: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     clauses = ["tenant_id = ?", "project_id = ?", "record_id = ?"]
     params: list[object] = [tenant_id, project_id, record_id]
     if task_type:
         clauses.append("task_type = ?")
         params.append(task_type)
+    if owner_user_id:
+        clauses.append("owner_user_id = ?")
+        params.append(owner_user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
     where = " AND ".join(clauses)
     total = _count(connection, f"SELECT COUNT(*) AS count FROM follow_ups WHERE {where}", params)
     rows = connection.execute(
@@ -328,9 +336,18 @@ def list_activities(
     *,
     limit: int,
     offset: int,
+    owner_user_id: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     params: list[object] = [tenant_id, project_id, record_id]
     where = "tenant_id = ? AND project_id = ? AND record_id = ?"
+    if owner_user_id:
+        where += (
+            " AND follow_up_id IN ("
+            "SELECT id FROM follow_ups "
+            "WHERE tenant_id = ? AND project_id = ? AND record_id = ? "
+            "AND owner_user_id = ? AND status = 'open')"
+        )
+        params.extend([tenant_id, project_id, record_id, owner_user_id])
     total = _count(connection, f"SELECT COUNT(*) AS count FROM record_activities WHERE {where}", params)
     rows = connection.execute(
         f"""

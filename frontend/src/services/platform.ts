@@ -785,6 +785,7 @@ export type CrmRecord = {
   display_name: string
   source: string
   source_label: string
+  assignee_user_id: string | null
   created_at: string
   updated_at: string
   captured_at: string

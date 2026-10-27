@@ -51,6 +51,32 @@ def _record(connection, tenant_id: str, project_id: str, record_id: str, caller)
     return record
 
 
+def _readable_record(connection, tenant_id: str, project_id: str, record_id: str, caller):
+    """Return the record and whether the caller may see only their own open follow-ups.
+
+    Record scope and assignment can read every follow-up on the record. Owning an
+    open follow-up can open that record, and nothing else stored on it.
+    """
+
+    record = get_record(connection, tenant_id, project_id, record_id)
+    if record is None:
+        return _error(404)
+    assignee = str(record["assignee_user_id"])
+    if _allowed(connection, tenant_id, project_id, caller, assignee):
+        return record, False
+    if _allowed(
+        connection,
+        tenant_id,
+        project_id,
+        caller,
+        assignee,
+        record_id,
+        include_follow_up_owner=True,
+    ):
+        return record, True
+    return _error(404)
+
+
 def _owner(connection, platform: PlatformClient, tenant_id: UUID, project_id: UUID, owner_id: object, request: Request):
     if not isinstance(owner_id, str):
         return _validation("Choose an owner.", {"owner_user_id": "Owner must be an active member of this project."})
@@ -115,9 +141,10 @@ def read_activities(
     if isinstance(opened, JSONResponse):
         return opened
     caller, _loaded = opened
-    record = _record(connection, str(tenant_id), str(project_id), str(record_id), caller)
-    if isinstance(record, JSONResponse):
-        return record
+    readable = _readable_record(connection, str(tenant_id), str(project_id), str(record_id), caller)
+    if isinstance(readable, JSONResponse):
+        return readable
+    _record_row, owner_only = readable
     items, total = list_activities(
         connection,
         str(tenant_id),
@@ -125,6 +152,7 @@ def read_activities(
         str(record_id),
         limit=limit,
         offset=offset,
+        owner_user_id=caller.user_id if owner_only else None,
     )
     visible = [item for item in items if item["record_id"] == str(record_id)]
     return _page(visible, total, limit, offset)
@@ -146,9 +174,10 @@ def read_follow_ups(
     if isinstance(opened, JSONResponse):
         return opened
     caller, _loaded = opened
-    record = _record(connection, str(tenant_id), str(project_id), str(record_id), caller)
-    if isinstance(record, JSONResponse):
-        return record
+    readable = _readable_record(connection, str(tenant_id), str(project_id), str(record_id), caller)
+    if isinstance(readable, JSONResponse):
+        return readable
+    _record_row, owner_only = readable
     if task_type and task_type not in TASK_TYPES:
         return _validation("Task type is not valid.", {"task_type": "Choose a listed task type."})
     items, total = list_follow_ups(
@@ -159,6 +188,8 @@ def read_follow_ups(
         task_type=task_type,
         limit=limit,
         offset=offset,
+        owner_user_id=caller.user_id if owner_only else None,
+        status="open" if owner_only else None,
     )
     visible = [item for item in items if item["record_id"] == str(record_id)]
     return _page(visible, total, limit, offset)

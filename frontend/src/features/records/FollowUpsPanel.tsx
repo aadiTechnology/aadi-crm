@@ -598,7 +598,7 @@ export function FollowUpQueues({ tenantId }: { tenantId: string }) {
           </select>
         </label>
       ) : (
-        <p>Showing your follow-ups on records assigned to you.</p>
+        <p>Showing your follow-ups.</p>
       )}
       {loading ? <p role="status">Loading follow-ups</p> : null}
       {loading ? <LoadingSkeleton /> : null}

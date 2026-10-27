@@ -469,10 +469,21 @@ def test_follow_up_owner_can_open_only_the_related_record(tmp_path, monkeypatch)
     assert added.status_code == 201
     base = f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{record_id}"
     follow_up = _add(client, base, owner_user_id=OTHER_ID, task_type="note", call_status=None, summary="Call the school")
+    private = _add(client, base, owner_user_id=USER_ID, task_type="email", call_status=None, summary="Manager only note")
     _become(platform, OTHER_ID, "member@example.com")
     opened = client.get(base, headers=_headers(write=False))
     assert opened.status_code == 200
     assert opened.json()["values"]["school_name"] == "Owned school"
+    listed = client.get(f"{base}/follow-ups", headers=_headers(write=False))
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [follow_up["id"]]
+    assert "Manager only note" not in listed.text
+    assert private["id"] not in {item["id"] for item in listed.json()["items"]}
+    activity = client.get(f"{base}/activities", headers=_headers(write=False))
+    assert activity.status_code == 200
+    assert "Note follow-up created" in activity.text
+    assert "Email follow-up created" not in activity.text
+    assert "Manager only note" not in activity.text
     hidden = client.get(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{hidden_id}",
         headers=_headers(write=False),

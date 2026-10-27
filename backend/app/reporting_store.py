@@ -9,7 +9,7 @@ already used by the record list.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 from app import followups_store
 from app.db import follow_up_due_date_expr
@@ -236,7 +236,10 @@ def _by_due_date(
         """,
         [start, end, *params],
     ).fetchall()
-    return [{"queue": row["queue"], "due_date": row["due_date"], "count": int(row["count"])} for row in rows]
+    return [
+        {"queue": row["queue"], "due_date": _civil_day(row["due_date"]), "count": int(row["count"])}
+        for row in rows
+    ]
 
 
 def _count_completed(
@@ -306,6 +309,16 @@ def _completed_row(row: sqlite3.Row) -> dict[str, object]:
         "due_time": due_time,
         "record_assignee_user_id": row["assignee_user_id"],
     }
+
+
+def _civil_day(value: object) -> str:
+    """Return YYYY-MM-DD. PostgreSQL can hand back a date; SQLite hands back text."""
+
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)[:10]
 
 
 def _scalar(connection: sqlite3.Connection, sql: str, params: list[object]) -> int:

@@ -1,7 +1,10 @@
 """Project KPIs use the same filters as the record list and follow-up queues."""
 
+import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+
+from app.reporting_store import _by_due_date
 
 from app.db import connect, database_path
 from tests.test_followups import _add, _body
@@ -229,6 +232,34 @@ def test_empty_project_and_cross_tenant_kpis_stay_closed(tmp_path, monkeypatch) 
     denied = client.get(_kpi(project_id), headers=_headers(write=False))
     assert denied.status_code == 404
     assert "Empty yard" not in denied.text
+
+
+def test_kpi_due_dates_stay_json_strings_when_postgres_returns_dates() -> None:
+    """PostgreSQL CAST AS date is a datetime.date. The KPI body must still encode."""
+
+    class Rows:
+        def execute(self, _sql, _params):
+            return self
+
+        def fetchall(self):
+            return [
+                {"queue": "overdue", "due_date": date(2026, 10, 1), "count": 1},
+                {"queue": "upcoming", "due_date": "2026-11-20", "count": 1},
+            ]
+
+    rows = _by_due_date(
+        Rows(),
+        "tenant",
+        "project",
+        None,
+        "2026-10-26T18:30:00.000000+00:00",
+        "2026-10-27T18:30:00.000000+00:00",
+    )
+    assert rows == [
+        {"queue": "overdue", "due_date": "2026-10-01", "count": 1},
+        {"queue": "upcoming", "due_date": "2026-11-20", "count": 1},
+    ]
+    json.dumps({"follow_ups": {"by_due_date": rows}})
 
 
 def _kpi(project_id: str) -> str:

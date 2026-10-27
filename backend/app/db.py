@@ -210,8 +210,8 @@ def follow_up_due_date_expr(connection) -> str:
     if isinstance(connection, sqlite3.Connection):
         return "date(datetime(replace(substr(follow_ups.due_at, 1, 19), 'T', ' '), '+330 minutes'))"
     return (
-        "CAST((CAST(substring(follow_ups.due_at FROM 1 FOR 19) AS timestamp) "
-        "+ interval '330 minutes') AS date)"
+        "CAST(CAST((CAST(substring(follow_ups.due_at FROM 1 FOR 19) AS timestamp) "
+        "+ interval '330 minutes') AS date) AS text)"
     )
 
 

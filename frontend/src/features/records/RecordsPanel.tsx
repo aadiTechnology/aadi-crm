@@ -11,6 +11,7 @@ import {
   getFormVersion,
   getProject,
   getRecord,
+  me,
   listForms,
   listProjects,
   exportRecords,
@@ -137,6 +138,19 @@ function filtersActive(query: RecordQuery): boolean {
 
 function summaryText(item: RecordListItem): string {
   return item.summary.map((entry) => `${entry.label}: ${entry.value}`).join(' · ')
+}
+
+function canChangeRecord(project: Project, record: CrmRecord, viewerId: string | null): boolean {
+  if (project.status === 'archived') {
+    return false
+  }
+  if (project.access.record_scope === 'project') {
+    return true
+  }
+  if (project.access.record_scope === 'assigned') {
+    return viewerId !== null && record.assignee_user_id === viewerId
+  }
+  return false
 }
 
 function lastOffset(total: number, limit: number): number {
@@ -735,6 +749,7 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
   const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [record, setRecord] = useState<CrmRecord | null>(null)
+  const [viewerId, setViewerId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reload, setReload] = useState(0)
@@ -763,6 +778,27 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
     }
   }, [tenantId, projectId, recordId, reload])
 
+  useEffect(() => {
+    if (project?.access.record_scope !== 'assigned') {
+      return
+    }
+    let cancelled = false
+    me()
+      .then((identity) => {
+        if (!cancelled) {
+          setViewerId(identity.id)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setViewerId(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
   async function onArchive() {
     if (!record || submitting) {
       return
@@ -779,6 +815,7 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
   }
 
   const archived = project?.status === 'archived'
+  const canChange = project && record ? canChangeRecord(project, record, viewerId) : false
   const absent = new Set(record?.absent_from_draft.map((item) => item.field_key) ?? [])
 
   return (
@@ -806,11 +843,11 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
               <h2 id="record-detail-heading">{record.public_number}</h2>
               <p className="page-intro">{record.display_name}</p>
             </div>
-            {archived ? null : (
+            {canChange ? (
               <Link className="button-link" to={`/tenants/${tenantId}/records/${projectId}/${record.id}/edit`}>
                 Edit record
               </Link>
-            )}
+            ) : null}
           </div>
           <p>
             Form {record.form_name}, version {record.version_number}. Form version {record.form_version_id}.
@@ -844,13 +881,13 @@ function RecordDetail({ tenantId, projectId, recordId }: { tenantId: string; pro
             tenantId={tenantId}
             projectId={projectId}
             recordId={record.id}
-            readOnly={Boolean(archived)}
+            readOnly={!canChange}
           />
-          {archived ? null : (
+          {canChange ? (
             <button type="button" onClick={() => void onArchive()} disabled={submitting}>
               {submitting ? 'Archiving record' : 'Archive record'}
             </button>
-          )}
+          ) : null}
         </>
       ) : null}
     </section>
@@ -869,6 +906,8 @@ function RecordEditor({
   const navigate = useNavigate()
   const saving = useRef(false)
   const [project, setProject] = useState<Project | null>(null)
+  const [viewerId, setViewerId] = useState<string | null>(null)
+  const [viewerReady, setViewerReady] = useState(false)
   const [forms, setForms] = useState<FormDefinition[]>([])
   const [formId, setFormId] = useState('')
   const [published, setPublished] = useState<FormVersion | null>(null)
@@ -919,6 +958,30 @@ function RecordEditor({
     }
   }, [tenantId, projectId, recordId])
 
+  useEffect(() => {
+    if (!record || project?.access.record_scope !== 'assigned') {
+      return
+    }
+    let cancelled = false
+    setViewerReady(false)
+    me()
+      .then((identity) => {
+        if (!cancelled) {
+          setViewerId(identity.id)
+          setViewerReady(true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setViewerId(null)
+          setViewerReady(true)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project, record])
+
   const selected = forms.find((form) => form.id === formId) ?? null
 
   useEffect(() => {
@@ -948,9 +1011,11 @@ function RecordEditor({
   const versionName = record?.form_name ?? published?.name ?? ''
   const versionDescription = record?.form_description ?? published?.description ?? ''
   const archived = project?.status === 'archived'
+  const canChange = !record || (project ? canChangeRecord(project, record, viewerId) : false)
+  const waitingForViewer = Boolean(record) && project?.access.record_scope === 'assigned' && !viewerReady
 
   async function onSave(values: Record<string, FormValue>) {
-    if (saving.current || archived) {
+    if (saving.current || archived || !canChange) {
       return
     }
     saving.current = true
@@ -991,6 +1056,10 @@ function RecordEditor({
         </p>
       ) : null}
       {archived ? <p>This project is archived. Records cannot be changed.</p> : null}
+      {waitingForViewer ? <p role="status">Loading record access</p> : null}
+      {!loading && !waitingForViewer && record && project && !canChange ? (
+        <p>Follow-up access can open this record. It does not allow editing it.</p>
+      ) : null}
       {!loading && !record && forms.length === 0 ? (
         <EmptyState title="No published form" message="Publish a form in this project before adding a record." />
       ) : null}
@@ -1018,7 +1087,7 @@ function RecordEditor({
           </label>
         </>
       ) : null}
-      {!loading && !archived && fields.length > 0 && (record || published) ? (
+      {!loading && !archived && canChange && fields.length > 0 && (record || published) ? (
         <FormRenderer
           key={record ? record.form_version_id : published?.id}
           name={versionName}

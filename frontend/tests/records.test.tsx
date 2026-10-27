@@ -111,6 +111,7 @@ function record(name = 'North school'): CrmRecord {
     display_name: name,
     source: 'manual',
     source_label: 'Manual',
+    assignee_user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     created_at: '2026-10-20T10:00:00.000Z',
     updated_at: '2026-10-20T10:00:00.000Z',
     captured_at: '2026-10-20T10:00:00.000Z',
@@ -400,3 +401,45 @@ function pageWith(item: CrmRecord): RecordPage {
 function asFetch() {
   return fetch as unknown as ReturnType<typeof vi.fn>
 }
+
+it('hides record editing when follow-up access opens another assignee record', async () => {
+  const member = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const assigned = project()
+  assigned.access = {
+    ...assigned.access,
+    role: 'project_member',
+    scope_policy: 'assigned',
+    can_manage_project: false,
+    can_manage_members: false,
+    can_manage_forms: false,
+    record_scope: 'assigned',
+  }
+  const visible = record()
+  visible.assignee_user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname.endsWith('/auth/me')) {
+      return json({ id: member, email: 'member@example.com' })
+    }
+    if (url.pathname.endsWith(`/projects/${PROJECT_ID}`)) {
+      return json(assigned)
+    }
+    if (url.pathname.endsWith(`/records/${RECORD_ID}`)) {
+      return json(visible)
+    }
+    if (url.pathname.endsWith('/follow-ups') || url.pathname.endsWith('/activities') || url.pathname.endsWith('/members')) {
+      return json({ items: [], total: 0, limit: 25, offset: 0 })
+    }
+    return json({ error: { message: 'Unexpected request' } }, 500)
+  })
+
+  renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}/${RECORD_ID}`)
+  expect(await screen.findByRole('heading', { name: 'N-1-0001' })).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: 'Edit record' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Archive record' })).not.toBeInTheDocument()
+  cleanup()
+
+  renderRecords(`/tenants/${TENANT}/records/${PROJECT_ID}/${RECORD_ID}/edit`)
+  expect(await screen.findByText('Follow-up access can open this record. It does not allow editing it.')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save record' })).not.toBeInTheDocument()
+})
