@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
@@ -34,6 +35,37 @@ from app.reminders_store import _claim, sync_follow_up_reminders
 
 TENANT = "tenant-postgres"
 USER = "user-postgres"
+DISPOSABLE_DATABASE = "aadi_crm_test"
+DISPOSABLE_ROLE = "aadi_crm_migrator"
+REFUSED_DATABASES = frozenset(
+    {
+        "aadi_platform",
+        "aadi_platform_test",
+        "aadi_platform_onboarding_test",
+        "aadi_platform_",
+        "aadi_crm",
+        "aadi_crm_dev",
+        "aadi_crm_",
+        "tenant-subscription-platform",
+    }
+)
+
+
+def assert_disposable_test_database(url: str) -> None:
+    """Reject every database except the disposable CRM test database."""
+
+    parsed = urlparse(url)
+    name = parsed.path.lstrip("/").split("?")[0]
+    if (
+        name != DISPOSABLE_DATABASE
+        or name in REFUSED_DATABASES
+        or "aadi_platform" in name.lower()
+    ):
+        raise RuntimeError(f"Refusing to migrate database {name!r}. Use {DISPOSABLE_DATABASE}.")
+    if (parsed.hostname or "") not in {"localhost", "127.0.0.1", "::1"} or parsed.port != 5433:
+        raise RuntimeError("CRM test database must be localhost port 5433.")
+    if parsed.username != DISPOSABLE_ROLE:
+        raise RuntimeError("CRM test database must use aadi_crm_migrator.")
 
 
 def test_sqlite_is_the_default_without_a_postgres_url(monkeypatch, tmp_path) -> None:
@@ -164,11 +196,34 @@ def test_sqlite_due_date_uses_the_kolkata_offset(tmp_path) -> None:
     connection.close()
 
 
+def test_postgres_integration_refuses_development_and_preserved_databases() -> None:
+    for database in (
+        "aadi_crm_dev",
+        "aadi_platform",
+        "aadi_platform_test",
+        "aadi_crm_",
+        "tenant-subscription-platform",
+    ):
+        with pytest.raises(RuntimeError, match="aadi_crm_test"):
+            assert_disposable_test_database(
+                f"postgresql://aadi_crm_migrator:secret@localhost:5433/{database}"
+            )
+    with pytest.raises(RuntimeError, match="localhost port 5433"):
+        assert_disposable_test_database(
+            "postgresql://aadi_crm_migrator:secret@localhost:5432/aadi_crm_test"
+        )
+    with pytest.raises(RuntimeError, match="aadi_crm_migrator"):
+        assert_disposable_test_database(
+            "postgresql://aadi_crm_app:secret@localhost:5433/aadi_crm_test"
+        )
+
+
 @pytest.fixture
 def postgres_connection(monkeypatch):
     url = os.environ.get("CRM_TEST_DATABASE_URL", "").strip()
     if not url:
         pytest.skip("CRM_TEST_DATABASE_URL is not set")
+    assert_disposable_test_database(url)
     monkeypatch.setenv("CRM_DATABASE_URL", url)
     monkeypatch.setenv("CRM_DATABASE_SSLMODE", os.environ.get("CRM_TEST_DATABASE_SSLMODE", "disable"))
     apply_postgres_migrations()
