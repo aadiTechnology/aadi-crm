@@ -416,6 +416,7 @@ def export_rows(
         source=query.source,
         created_from=query.created_from,
         created_to=query.created_to,
+        status=query.status,
         sort=query.sort,
         direction=query.direction,
         limit=MAX_EXPORT_ROWS + 1,

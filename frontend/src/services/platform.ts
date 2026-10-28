@@ -818,6 +818,7 @@ export type RecordQuery = {
   source?: string
   createdFrom?: string
   createdTo?: string
+  status?: string
   sort?: 'created_at' | 'updated_at' | 'public_number'
   direction?: 'asc' | 'desc'
   limit?: number
@@ -845,6 +846,9 @@ export function listRecords(tenantId: string, projectId: string, query: RecordQu
   }
   if (query.createdTo) {
     params.set('created_to', query.createdTo)
+  }
+  if (query.status) {
+    params.set('status', query.status)
   }
   if (query.sort) {
     params.set('sort', query.sort)
@@ -1318,6 +1322,9 @@ export async function exportRecords(
   if (query.createdTo) {
     params.set('created_to', query.createdTo)
   }
+  if (query.status) {
+    params.set('status', query.status)
+  }
   if (query.sort) {
     params.set('sort', query.sort)
   }
@@ -1366,6 +1373,7 @@ export type ProjectKpis = {
   active_records: number
   records_created: number | null
   records_by_form: { form_id: string; form_name: string; count: number }[]
+  records_by_status: { value: string; label: string; count: number }[]
   follow_ups: {
     overdue: number
     today: number

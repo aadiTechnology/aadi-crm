@@ -43,6 +43,7 @@ function report(overrides: Partial<ProjectKpis> = {}): ProjectKpis {
     active_records: 2,
     records_created: 1,
     records_by_form: [{ form_id: '55555555-5555-4555-8555-555555555555', form_name: 'Site enquiry', count: 2 }],
+    records_by_status: [{ value: 'new', label: 'New', count: 2 }],
     follow_ups: {
       overdue: 1,
       today: 0,
@@ -51,7 +52,7 @@ function report(overrides: Partial<ProjectKpis> = {}): ProjectKpis {
       by_owner: [],
       by_due_date: [{ queue: 'overdue', due_date: '2026-10-20', count: 1 }],
     },
-    omitted: ['record_status', 'trends', 'targets'],
+    omitted: ['trends', 'targets'],
     ...overrides,
   }
 }
@@ -115,7 +116,11 @@ it('shows KPI counts and drill-down links that use the same period', async () =>
     `/tenants/${TENANT}/records/${PROJECT_ID}?form_id=55555555-5555-4555-8555-555555555555&from=kpis`,
   )
   expect(screen.getByText('2026-10-20')).toBeInTheDocument()
-  expect(screen.getByText(/Record status is not stored/)).toBeInTheDocument()
+  expect(screen.getByText(/published form field Status/)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'View New' })).toHaveAttribute(
+    'href',
+    `/tenants/${TENANT}/records/${PROJECT_ID}?status=new&status_label=New&from=kpis`,
+  )
 })
 
 it('shows an empty project and a completed list that reports the same count', async () => {
@@ -148,7 +153,11 @@ it('shows an empty project and a completed list that reports the same count', as
       return json({ items: [], directory_available: true })
     }
     if (url.includes('/kpis')) {
-      return json(report({ records_by_form: [], follow_ups: { ...report().follow_ups, by_due_date: [], by_owner: [] } }))
+      return json(report({
+        records_by_form: [],
+        records_by_status: [],
+        follow_ups: { ...report().follow_ups, by_due_date: [], by_owner: [] },
+      }))
     }
     if (url.includes('/projects/')) {
       return json(project())
@@ -157,6 +166,7 @@ it('shows an empty project and a completed list that reports the same count', as
   })
   renderProject()
   expect(await screen.findByText('No active records.')).toBeInTheDocument()
+  expect(screen.getByText('No records have a pipeline status.')).toBeInTheDocument()
   expect(screen.getAllByText('No open follow-ups in these queues.')).toHaveLength(2)
   await user.click(screen.getByRole('button', { name: 'View completed follow-ups' }))
   expect(await screen.findByText('The list has 1 completed follow-ups. The KPI count is 1.')).toBeInTheDocument()

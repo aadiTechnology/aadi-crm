@@ -89,7 +89,8 @@ def test_kpis_match_authorized_lists_and_queue_boundaries(tmp_path, monkeypatch)
     assert body["record_date_boundary"] == "utc_calendar_day"
     assert body["window_start"] == "2026-10-20T18:30:00.000000+00:00"
     assert body["window_end"] == "2026-10-21T18:30:00.000000+00:00"
-    assert body["omitted"] == ["record_status", "trends", "targets"]
+    assert body["omitted"] == ["trends", "targets"]
+    assert body["records_by_status"] == []
     assert body["active_records"] == 2
     assert body["records_created"] is None
     assert sum(item["count"] for item in body["records_by_form"]) == 2
@@ -132,6 +133,7 @@ def test_kpis_match_authorized_lists_and_queue_boundaries(tmp_path, monkeypatch)
     member_report = client.get(_kpi(project_id), headers=_headers(write=False))
     assert member_report.status_code == 200, member_report.text
     member_body = member_report.json()
+    assert member_body["records_by_status"] == []
     assert member_body["active_records"] == 1
     assert member_body["records_by_form"] == [
         {"form_id": member_form, "form_name": "Hiring desk", "count": 1}
@@ -215,6 +217,7 @@ def test_empty_project_and_cross_tenant_kpis_stay_closed(tmp_path, monkeypatch) 
     assert body["active_records"] == 0
     assert body["records_created"] is None
     assert body["records_by_form"] == []
+    assert body["records_by_status"] == []
     assert body["follow_ups"] == {
         "overdue": 0,
         "today": 0,
@@ -262,6 +265,138 @@ def test_kpi_due_dates_stay_json_strings_when_postgres_returns_dates() -> None:
     json.dumps({"follow_ups": {"by_due_date": rows}})
 
 
+def test_pipeline_status_counts_match_the_filtered_list(tmp_path, monkeypatch) -> None:
+    platform = _platform()
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id = _project(client, code="STAT", name="Status yard")
+    form_id = _form(client, project_id, name="Enquiry")
+    _add_field(client, project_id, form_id, {
+        "field_key": "school_name",
+        "label": "School name",
+        "field_type": "text",
+        "required": True,
+        "help_text": "",
+        "section_name": "Contact",
+        "max_length": 120,
+    })
+    _add_field(client, project_id, form_id, {
+        "field_key": "status",
+        "label": "Status",
+        "field_type": "dropdown",
+        "required": True,
+        "section_name": "Record",
+        "options": [
+            {"value": "new", "label": "New"},
+            {"value": "in_progress", "label": "In Progress"},
+            {"value": "converted", "label": "Converted"},
+        ],
+    })
+    _add_field(client, project_id, form_id, {
+        "field_key": "priority",
+        "label": "Priority",
+        "field_type": "dropdown",
+        "required": False,
+        "section_name": "Record",
+        "options": [
+            {"value": "high", "label": "High"},
+            {"value": "low", "label": "Low"},
+        ],
+    })
+    assert _publish(client, project_id, form_id).status_code == 201
+    north = _create(client, project_id, form_id, {"school_name": "North school", "status": "new", "priority": "high"})
+    south = _create(client, project_id, form_id, {"school_name": "South school", "status": "new", "priority": "low"})
+    west = _create(client, project_id, form_id, {"school_name": "West school", "status": "in_progress", "priority": "high"})
+    assert north.status_code == south.status_code == west.status_code == 201
+    plain_form = _form(client, project_id, name="No status")
+    _add_field(client, project_id, plain_form, {
+        "field_key": "school_name",
+        "label": "School name",
+        "field_type": "text",
+        "required": True,
+        "help_text": "",
+        "section_name": "Contact",
+        "max_length": 120,
+    })
+    assert _publish(client, project_id, plain_form).status_code == 201
+    plain = _create(client, project_id, plain_form, {"school_name": "Plain school"})
+    assert plain.status_code == 201
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    _become(platform, OTHER_ID, "member@example.com")
+    member = _create(
+        client,
+        project_id,
+        form_id,
+        {"school_name": "Member school", "status": "converted", "priority": "low"},
+    )
+    assert member.status_code == 201
+
+    _become(platform, USER_ID, "manager@example.com")
+    report = client.get(_kpi(project_id), headers=_headers(write=False))
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["active_records"] == 5
+    assert body["records_by_status"] == [
+        {"value": "converted", "label": "Converted", "count": 1},
+        {"value": "in_progress", "label": "In Progress", "count": 1},
+        {"value": "new", "label": "New", "count": 2},
+    ]
+    assert sum(item["count"] for item in body["records_by_status"]) == 4
+    assert "high" not in {item["value"] for item in body["records_by_status"]}
+    assert "Plain school" not in report.text
+    assert _record_total(client, project_id, status="new") == 2
+    new_list = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records?status=new",
+        headers=_headers(write=False),
+    )
+    assert {item["display_name"] for item in new_list.json()["items"]} == {"North school", "South school"}
+    assert _record_total(client, project_id, status="high") == 0
+    rejected = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records?status={'x' * 121}",
+        headers=_headers(write=False),
+    )
+    assert rejected.status_code == 422
+
+    _become(platform, OTHER_ID, "member@example.com")
+    member_report = client.get(_kpi(project_id), headers=_headers(write=False))
+    assert member_report.status_code == 200, member_report.text
+    assert member_report.json()["active_records"] == 1
+    assert member_report.json()["records_by_status"] == [
+        {"value": "converted", "label": "Converted", "count": 1}
+    ]
+    assert _record_total(client, project_id, status="converted") == 1
+    assert _record_total(client, project_id, status="new") == 0
+    assert "North school" not in member_report.text
+    hidden = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{north.json()['id']}",
+        headers=_headers(write=False),
+    )
+    assert hidden.status_code == 404
+
+    _become(platform, USER_ID, "manager@example.com")
+    current = client.get(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{north.json()['id']}",
+        headers=_headers(write=False),
+    )
+    archived = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{north.json()['id']}/archive",
+        headers=_headers(write=True),
+        json={"expected_updated_at": current.json()["updated_at"]},
+    )
+    assert archived.status_code == 200
+    after = client.get(_kpi(project_id), headers=_headers(write=False)).json()
+    assert after["records_by_status"] == [
+        {"value": "converted", "label": "Converted", "count": 1},
+        {"value": "in_progress", "label": "In Progress", "count": 1},
+        {"value": "new", "label": "New", "count": 1},
+    ]
+    assert _record_total(client, project_id, status="new") == 1
+
+
 def _kpi(project_id: str) -> str:
     return f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/kpis"
 
@@ -270,7 +405,15 @@ def _completed(project_id: str) -> str:
     return f"{_kpi(project_id)}/completed-follow-ups"
 
 
-def _record_total(client, project_id: str, *, form_id: str = "", created_from: str = "", created_to: str = "") -> int:
+def _record_total(
+    client,
+    project_id: str,
+    *,
+    form_id: str = "",
+    created_from: str = "",
+    created_to: str = "",
+    status: str = "",
+) -> int:
     params = []
     if form_id:
         params.append(f"form_id={form_id}")
@@ -278,6 +421,8 @@ def _record_total(client, project_id: str, *, form_id: str = "", created_from: s
         params.append(f"created_from={created_from}")
     if created_to:
         params.append(f"created_to={created_to}")
+    if status:
+        params.append(f"status={status}")
     suffix = f"?{'&'.join(params)}" if params else ""
     response = client.get(
         f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records{suffix}",

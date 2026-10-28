@@ -13,6 +13,9 @@ from datetime import date, datetime
 
 from app import followups_store
 from app.db import follow_up_due_date_expr
+from app.records_store import RecordValidation, _load_schema, _option_label, _schema_fields, _values_for
+
+_PIPELINE_STATUS = "status"
 
 _RECORD_FROM = """
     FROM records
@@ -71,6 +74,7 @@ def project_kpis(
         "active_records": active,
         "records_created": created,
         "records_by_form": _records_by_form(connection, tenant_id, project_id, assignee_user_id),
+        "records_by_status": _records_by_status(connection, tenant_id, project_id, assignee_user_id),
         "follow_ups": {
             "overdue": overdue,
             "today": today,
@@ -79,7 +83,7 @@ def project_kpis(
             "by_owner": _by_owner(connection, tenant_id, project_id, assignee_user_id, start, end),
             "by_due_date": _by_due_date(connection, tenant_id, project_id, assignee_user_id, start, end),
         },
-        "omitted": ["record_status", "trends", "targets"],
+        "omitted": ["trends", "targets"],
     }
 
 
@@ -149,6 +153,55 @@ def _records_by_form(
         {"form_id": row["form_id"], "form_name": row["form_name"], "count": int(row["count"])}
         for row in rows
     ]
+
+
+def _records_by_status(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    project_id: str,
+    assignee_user_id: str | None,
+) -> list[dict[str, object]]:
+    """Count active records by the published form field `status`.
+
+    Priority, lead source, and follow-up status are different measures.
+    A blank value is omitted. The stored option value is the list filter.
+    """
+
+    clauses, params = _record_scope(tenant_id, project_id, assignee_user_id, "", "")
+    where = " AND ".join(clauses)
+    rows = connection.execute(
+        f"""
+        SELECT records.id, form_versions.schema_json
+        {_RECORD_FROM}
+        WHERE {where}
+        """,
+        params,
+    ).fetchall()
+    values = _values_for(connection, [row["id"] for row in rows])
+    counts: dict[str, int] = {}
+    labels: dict[str, set[str]] = {}
+    for row in rows:
+        raw_schema = row["schema_json"]
+        schema = raw_schema if isinstance(raw_schema, dict) else _load_schema(str(raw_schema))
+        try:
+            fields = _schema_fields(schema)
+        except RecordValidation:
+            continue
+        field = next((item for item in fields if str(item.get("field_key")) == _PIPELINE_STATUS), None)
+        if field is None:
+            continue
+        raw = values.get(row["id"], {}).get(_PIPELINE_STATUS)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        counts[raw] = counts.get(raw, 0) + 1
+        labels.setdefault(raw, set()).add(_option_label(field, raw))
+    items = []
+    for value, count in counts.items():
+        chosen = labels[value]
+        label = next(iter(chosen)) if len(chosen) == 1 else value
+        items.append({"value": value, "label": label, "count": count})
+    items.sort(key=lambda item: (str(item["label"]).casefold(), str(item["value"])))
+    return items
 
 
 def _queue_totals(

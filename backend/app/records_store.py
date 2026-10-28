@@ -74,11 +74,20 @@ class RecordListQuery:
     source: str = ""
     created_from: str = ""
     created_to: str = ""
+    status: str = ""
     sort: str = "created_at"
     direction: str = "desc"
     limit: int = 25
     offset: int = 0
     assignee_user_id: str | None = None
+
+
+def pipeline_status_param(value: str) -> str:
+    """Return a pipeline-status list filter, or reject a value that cannot be stored."""
+
+    if len(value) > 120 or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("Status filter is not valid.")
+    return value
 
 
 def field_has_saved_values(
@@ -219,6 +228,21 @@ def list_records(
     if query.created_to:
         clauses.append("substr(records.created_at, 1, 10) <= ?")
         params.append(query.created_to)
+    if query.status:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM record_values
+                WHERE record_values.record_id = records.id
+                  AND record_values.tenant_id = records.tenant_id
+                  AND record_values.project_id = records.project_id
+                  AND record_values.field_key = 'status'
+                  AND record_values.value_json = ?
+            )
+            """
+        )
+        params.append(json.dumps(query.status, separators=(",", ":"), sort_keys=True))
     if query.search:
         clauses.append("records.search_text LIKE ? ESCAPE '\\'")
         params.append(_like(query.search))

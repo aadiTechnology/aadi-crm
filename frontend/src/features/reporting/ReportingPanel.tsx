@@ -225,7 +225,7 @@ function ProjectKpiView({ tenantId, projectId }: { tenantId: string; projectId: 
           </div>
           <section className="stack" aria-labelledby="form-kpi-heading">
             <h3 id="form-kpi-heading">Records by form</h3>
-            <p>These counts are active records, without the created-date period. Record status is not stored, so it is not counted.</p>
+            <p>These counts are active records, without the created-date period.</p>
             {report.records_by_form.length === 0 ? <p>No active records.</p> : null}
             {report.records_by_form.length > 0 ? (
               <div className="table-wrap">
@@ -245,6 +245,42 @@ function ProjectKpiView({ tenantId, projectId }: { tenantId: string; projectId: 
                         <td>
                           <Link to={`/tenants/${tenantId}/records/${projectId}?form_id=${item.form_id}&from=kpis`}>
                             View {item.form_name}
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </section>
+          <section className="stack" aria-labelledby="status-kpi-heading">
+            <h3 id="status-kpi-heading">Records by status</h3>
+            <p>
+              These counts use the published form field Status. Records without that field are not included. Priority,
+              lead source, and follow-up status stay separate.
+            </p>
+            {report.records_by_status.length === 0 ? <p>No records have a pipeline status.</p> : null}
+            {report.records_by_status.length > 0 ? (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Records</th>
+                      <th>List</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.records_by_status.map((item) => (
+                      <tr key={item.value}>
+                        <td>{item.label}</td>
+                        <td>{item.count}</td>
+                        <td>
+                          <Link
+                            to={`/tenants/${tenantId}/records/${projectId}?status=${encodeURIComponent(item.value)}&status_label=${encodeURIComponent(item.label)}&from=kpis`}
+                          >
+                            View {item.label}
                           </Link>
                         </td>
                       </tr>

@@ -136,7 +136,7 @@ function payloadValues(fields: RenderField[], values: Record<string, FormValue>)
 }
 
 function filtersActive(query: RecordQuery): boolean {
-  return Boolean(query.q || query.formId || query.source || query.createdFrom || query.createdTo)
+  return Boolean(query.q || query.formId || query.source || query.createdFrom || query.createdTo || query.status)
 }
 
 function summaryText(item: RecordListItem): string {
@@ -260,6 +260,8 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
     formId: params.get('form_id') ?? '',
     createdFrom: params.get('created_from') ?? '',
     createdTo: params.get('created_to') ?? '',
+    status: params.get('status') ?? '',
+    statusLabel: params.get('status_label') ?? '',
   }
   const fromKpis = params.get('from') === 'kpis'
   const [project, setProject] = useState<Project | null>(null)
@@ -287,6 +289,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
     formId: preset.formId || undefined,
     createdFrom: preset.createdFrom || undefined,
     createdTo: preset.createdTo || undefined,
+    status: preset.status || undefined,
   })
   const [reload, setReload] = useState(0)
   const [exportNote, setExportNote] = useState<string | null>(null)
@@ -418,6 +421,7 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
         source: undefined,
         createdFrom: undefined,
         createdTo: undefined,
+        status: undefined,
         offset: 0,
       }
     })
@@ -462,6 +466,9 @@ function RecordList({ tenantId, projectId }: { tenantId: string; projectId: stri
         </p>
       ) : null}
       {archived ? <p>This project is archived. Existing records can still be read.</p> : null}
+      {preset.status ? (
+        <p>Pipeline status: {preset.statusLabel || preset.status}. This is the form field Status.</p>
+      ) : null}
       <form className="panel record-filters" onSubmit={onSearch}>
         <label className="filter-search">
           Search records

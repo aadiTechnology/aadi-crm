@@ -21,7 +21,7 @@ from app.forms_store import get_form
 from app.imports_store import ImportProblem, commit_job, create_job, error_report, export_rows, present_job, preview_job, save_decisions, save_mapping
 from app.platform_client import PlatformClient
 from app.project_access import SCOPE_ASSIGNED
-from app.records_store import SOURCES, RecordListQuery
+from app.records_store import SOURCES, RecordListQuery, pipeline_status_param
 from app.spreadsheets import SpreadsheetError, read_table, write_csv, write_xlsx
 
 router = APIRouter(prefix="/api/v1", tags=["imports"])
@@ -428,6 +428,7 @@ def read_export(
     source: str = "",
     created_from: str = "",
     created_to: str = "",
+    status: str = "",
     sort: str = "created_at",
     direction: str = "desc",
 ) -> Response:
@@ -447,6 +448,10 @@ def read_export(
         return _validation("Created-to must use YYYY-MM-DD.")
     if created_from and created_to and created_from > created_to:
         return _validation("Created-from cannot be after created-to.")
+    try:
+        status = pipeline_status_param(status)
+    except ValueError:
+        return _validation("Status filter is not valid.")
     if sort not in {"created_at", "updated_at", "public_number"}:
         return _validation("Sort is not valid.")
     if direction not in {"asc", "desc"}:
@@ -462,6 +467,7 @@ def read_export(
                 source=source,
                 created_from=created_from,
                 created_to=created_to,
+                status=status,
                 sort=sort,
                 direction=direction,
                 assignee_user_id=_assignee(access, caller),

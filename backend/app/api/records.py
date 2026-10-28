@@ -20,6 +20,7 @@ from app.project_access import FEATURE_RECORDS, SCOPE_ASSIGNED, RecordRef
 from app.records_store import (
     SOURCES,
     RecordListQuery,
+    pipeline_status_param,
     RecordValidation,
     StaleRecord,
     UnpublishedForm,
@@ -122,6 +123,7 @@ def read_records(
     source: str = "",
     created_from: str = "",
     created_to: str = "",
+    status: str = "",
     sort: str = "created_at",
     direction: str = "desc",
     limit: int = Query(default=25, ge=1, le=100),
@@ -142,6 +144,10 @@ def read_records(
         return _validation("Created-to must use YYYY-MM-DD.")
     if created_from and created_to and created_from > created_to:
         return _validation("Created-from cannot be after created-to.")
+    try:
+        status = pipeline_status_param(status)
+    except ValueError:
+        return _validation("Status filter is not valid.")
     if sort not in {"created_at", "updated_at", "public_number"}:
         return _validation("Sort is not valid.")
     if direction not in {"asc", "desc"}:
@@ -157,6 +163,7 @@ def read_records(
             source=source,
             created_from=created_from,
             created_to=created_to,
+            status=status,
             sort=sort,
             direction=direction,
             limit=limit,
