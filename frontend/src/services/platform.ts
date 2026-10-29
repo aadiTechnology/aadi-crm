@@ -7,6 +7,8 @@ export const PROJECT_ACCESS_PERMISSION = 'crm.project_management.access'
 export const RECORDS_ACCESS_PERMISSION = 'crm.records.access'
 export const PROJECT_MANAGE_PERMISSION = 'crm.project_management.manage'
 export const AUDIT_PERMISSION = 'audit.read'
+export const ROLES_MANAGE_PERMISSION = 'roles.manage'
+export const USERS_READ_PERMISSION = 'users.read'
 export const FEATURE_LEADS = 'lead_management'
 export const FEATURE_PROJECTS = 'project_management'
 export const FEATURE_RECORDS = 'records'
@@ -1449,4 +1451,178 @@ export function listAuditEvents(
   limit = 50,
 ): Promise<{ items: AuditEvent[]; limit: number; source: string }> {
   return request(crmUrl(), `/api/v1/tenants/${tenantId}/audit-events?limit=${limit}`)
+}
+
+export type TenantCrmRole = {
+  id: string
+  tenant_id: string
+  name: string
+  description: string
+  status: string
+  permissions: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type TenantCrmRoleAssignment = {
+  id: string
+  tenant_id: string
+  role_id: string
+  user_id: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+/** Identity fields used to choose a person. Membership ids are never kept. */
+export type TenantDirectoryUser = {
+  id: string
+  email: string
+  identityActive: boolean
+  membershipStatus: 'active' | 'inactive'
+}
+
+export type TenantCrmRoleInput = {
+  name: string
+  description: string
+}
+
+function roleCollectionPath(tenantId: string): string {
+  return `/api/v1/tenants/${tenantId}/roles`
+}
+
+function rolePath(tenantId: string, roleId: string): string {
+  return `${roleCollectionPath(tenantId)}/${roleId}`
+}
+
+function readDirectoryUser(value: unknown): TenantDirectoryUser {
+  if (!value || typeof value !== 'object') {
+    throw new ApiError(502, 'The request could not be completed.')
+  }
+  const row = value as Record<string, unknown>
+  const id = row.id
+  const email = row.email
+  const identityActive = row.identity_active
+  const membershipStatus = row.membership_status
+  if (
+    typeof id !== 'string' ||
+    !id.trim() ||
+    typeof email !== 'string' ||
+    !email.trim() ||
+    typeof identityActive !== 'boolean' ||
+    (membershipStatus !== 'active' && membershipStatus !== 'inactive')
+  ) {
+    throw new ApiError(502, 'The request could not be completed.')
+  }
+  return {
+    id,
+    email: email.trim(),
+    identityActive,
+    membershipStatus,
+  }
+}
+
+export function listTenantCrmRoles(tenantId: string): Promise<{ items: TenantCrmRole[] }> {
+  return request(crmUrl(), roleCollectionPath(tenantId))
+}
+
+export function createTenantCrmRole(tenantId: string, input: TenantCrmRoleInput): Promise<TenantCrmRole> {
+  return request(crmUrl(), roleCollectionPath(tenantId), {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ name: input.name, description: input.description }),
+  })
+}
+
+export function updateTenantCrmRole(
+  tenantId: string,
+  roleId: string,
+  input: TenantCrmRoleInput,
+): Promise<TenantCrmRole> {
+  return request(crmUrl(), rolePath(tenantId, roleId), {
+    method: 'PATCH',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ name: input.name, description: input.description }),
+  })
+}
+
+export function deactivateTenantCrmRole(tenantId: string, roleId: string): Promise<TenantCrmRole> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/deactivate`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+  })
+}
+
+export function listCrmPermissionCatalog(tenantId: string): Promise<{ items: string[] }> {
+  return request(crmUrl(), `/api/v1/tenants/${tenantId}/crm-permissions`)
+}
+
+export function listTenantCrmRolePermissions(
+  tenantId: string,
+  roleId: string,
+): Promise<{ items: string[] }> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/permissions`)
+}
+
+export function grantTenantCrmRolePermission(
+  tenantId: string,
+  roleId: string,
+  permissionKey: string,
+): Promise<{ items: string[] }> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/permissions`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ permission_key: permissionKey }),
+  })
+}
+
+export function removeTenantCrmRolePermission(
+  tenantId: string,
+  roleId: string,
+  permissionKey: string,
+): Promise<{ items: string[] }> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/permissions/remove`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ permission_key: permissionKey }),
+  })
+}
+
+export function listTenantCrmRoleAssignments(
+  tenantId: string,
+  roleId: string,
+): Promise<{ items: TenantCrmRoleAssignment[] }> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/assignments`)
+}
+
+export function assignTenantCrmRole(
+  tenantId: string,
+  roleId: string,
+  userId: string,
+): Promise<TenantCrmRoleAssignment> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/assignments`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
+
+export function revokeTenantCrmRoleAssignment(
+  tenantId: string,
+  roleId: string,
+  userId: string,
+): Promise<TenantCrmRoleAssignment> {
+  return request(crmUrl(), `${rolePath(tenantId, roleId)}/assignments/remove`, {
+    method: 'POST',
+    headers: mutationHeaders(),
+    body: JSON.stringify({ user_id: userId }),
+  })
+}
+
+export async function listTenantDirectoryUsers(tenantId: string): Promise<TenantDirectoryUser[]> {
+  const payload = await request<unknown>(platformUrl(), `/api/v1/tenants/${tenantId}/users`)
+  if (!Array.isArray(payload)) {
+    throw new ApiError(502, 'The request could not be completed.')
+  }
+  return payload.map((item) => readDirectoryUser(item))
 }

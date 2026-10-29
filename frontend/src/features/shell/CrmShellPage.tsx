@@ -6,6 +6,7 @@ import { ProjectsPanel } from '@/features/projects/ProjectsPanel'
 import { FollowUpQueues } from '@/features/records/FollowUpsPanel'
 import { ReportingPanel } from '@/features/reporting/ReportingPanel'
 import { AuditPanel } from '@/features/audit/AuditPanel'
+import { RolesPanel } from '@/features/roles/RolesPanel'
 import { ImportsPanel } from '@/features/imports/ImportsPanel'
 import { RemindersPanel } from '@/features/reminders/RemindersPanel'
 import { RecordsPanel } from '@/features/records/RecordsPanel'
@@ -24,6 +25,8 @@ import {
   getPermissions,
   getProductAccess,
   LEADS_PERMISSION,
+  ROLES_MANAGE_PERMISSION,
+  USERS_READ_PERMISSION,
   listTenants,
   login,
   logout,
@@ -60,6 +63,8 @@ type Screen =
       canOpenProjects: boolean
       canOpenRecords: boolean
       canOpenAudit: boolean
+      canManageRoles: boolean
+      canReadUsers: boolean
       leads: LeadsView
       signingOut: boolean
     }
@@ -89,9 +94,16 @@ function auditAllowed(access: ProductAccess, permissions: string[]): boolean {
   return access.available && canOpenAudit(permissions)
 }
 
+function rolesAllowed(permissions: string[]): boolean {
+  return permissions.includes(ROLES_MANAGE_PERMISSION)
+}
+
 function workspacePage(pathname: string): string {
   if (pathname.includes('/audit')) {
     return 'Audit'
+  }
+  if (pathname.includes('/roles')) {
+    return 'CRM roles'
   }
   if (pathname.includes('/kpis')) {
     return 'Project KPIs'
@@ -197,6 +209,7 @@ export function CrmShellPage() {
   const onFollowUps = location.pathname.includes('/follow-ups')
   const onKpis = location.pathname.includes('/kpis')
   const onAudit = location.pathname.includes('/audit')
+  const onRoles = location.pathname.includes('/roles')
   const onRecords = location.pathname.includes('/records')
   const onProjects = location.pathname.includes('/projects') && !onForms && !onRecords
   const [sessionVersion, setSessionVersion] = useState(0)
@@ -297,6 +310,8 @@ export function CrmShellPage() {
         const canOpenProjects = projectsAllowed(access, permissions)
         const canOpenRecords = recordsAllowed(access, permissions)
         const canOpenAudit = auditAllowed(access, permissions)
+        const canManageRoles = rolesAllowed(permissions)
+        const canReadUsers = permissions.includes(USERS_READ_PERMISSION)
         let leads: LeadsView = { status: 'hidden' }
         if (onLeads) {
           try {
@@ -320,6 +335,8 @@ export function CrmShellPage() {
             canOpenProjects,
             canOpenRecords,
             canOpenAudit,
+            canManageRoles,
+            canReadUsers,
             leads,
             signingOut: false,
           })
@@ -481,7 +498,9 @@ export function CrmShellPage() {
             <Link
               className="nav-link"
               to={`/tenants/${tenantIdForNav}`}
-              aria-current={!onLeads && !onProjects && !onForms && !onRecords && !onKpis && !onAudit ? 'page' : undefined}
+              aria-current={
+                !onLeads && !onProjects && !onForms && !onRecords && !onKpis && !onAudit && !onRoles ? 'page' : undefined
+              }
             >
               <NavIcon name="overview" />
               <span className="nav-label">Overview</span>
@@ -592,6 +611,16 @@ export function CrmShellPage() {
               <span className="nav-label">Audit</span>
             </Link>
           ) : null}
+          {screen.status === 'shell' && screen.canManageRoles ? (
+            <Link
+              className="nav-link"
+              to={`/tenants/${tenantIdForNav}/roles`}
+              aria-current={onRoles ? 'page' : undefined}
+            >
+              <NavIcon name="roles" />
+              <span className="nav-label">CRM roles</span>
+            </Link>
+          ) : null}
           {screen.status === 'shell' && !screen.canOpenRecords ? (
             <p className="nav-note">Reminders is not available for this sign-in.</p>
           ) : null}
@@ -680,7 +709,7 @@ export function CrmShellPage() {
 
           {screen.status === 'shell' ? (
             <section className="stack" aria-label={screen.access.product_name}>
-              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders && !onImports && !onKpis && !onAudit ? (
+              {!onProjects && !onForms && !onLeads && !onRecords && !onFollowUps && !onReminders && !onImports && !onKpis && !onAudit && !onRoles ? (
                 <h2 id="crm-heading">Overview</h2>
               ) : null}
               {screen.access.available ? (
@@ -700,6 +729,9 @@ export function CrmShellPage() {
               {onFollowUps && screen.canOpenRecords ? <FollowUpQueues tenantId={screen.access.tenant_id} /> : null}
               {onKpis && screen.canOpenRecords ? <ReportingPanel tenantId={screen.access.tenant_id} /> : null}
               {onAudit && screen.canOpenAudit ? <AuditPanel tenantId={screen.access.tenant_id} /> : null}
+              {onRoles && screen.canManageRoles ? (
+                <RolesPanel tenantId={screen.access.tenant_id} canReadUsers={screen.canReadUsers} />
+              ) : null}
               {onProjects && !screen.canOpenProjects ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
@@ -736,6 +768,11 @@ export function CrmShellPage() {
                 </p>
               ) : null}
               {onAudit && !screen.canOpenAudit ? (
+                <p role="alert" className="alert alert-error">
+                  You do not have permission to perform this action.
+                </p>
+              ) : null}
+              {onRoles && !screen.canManageRoles ? (
                 <p role="alert" className="alert alert-error">
                   You do not have permission to perform this action.
                 </p>
