@@ -251,6 +251,7 @@ def test_postgres_schema_tracks_migrations_and_constraints(postgres_connection) 
         "006_followups.sql",
         "007_reminders.sql",
         "008_imports.sql",
+        "009_tenant_roles.sql",
     ]
     partial = postgres_connection.execute(
         """

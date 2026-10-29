@@ -18,6 +18,7 @@ from app.api.reminders import router as reminders_router
 from app.api.forms import router as forms_router
 from app.api.projects import router as projects_router
 from app.api.records import router as records_router
+from app.api.roles import router as roles_router
 from app.api.shell import router as shell_router
 from app.db import resolve_database
 
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     application.include_router(imports_router)
     application.include_router(reporting_router)
     application.include_router(audit_router)
+    application.include_router(roles_router)
     return application
 
 

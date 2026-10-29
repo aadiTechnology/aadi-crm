@@ -13,6 +13,14 @@ PROJECT_ACCESS_PERMISSION = "crm.project_management.access"
 RECORDS_ACCESS_PERMISSION = "crm.records.access"
 LEADS_PERMISSION = "crm.lead_management.read"
 REGISTERED_CRM_PERMISSION = LEADS_PERMISSION
+# Grant catalog for tenant-defined CRM roles. These identifiers already exist.
+# The catalog is not a feature entitlement list and does not change ACTIONS.
+SUPPORTED_CRM_PERMISSIONS = (
+    LEADS_PERMISSION,
+    PROJECT_ACCESS_PERMISSION,
+    PROJECT_MANAGE_PERMISSION,
+    RECORDS_ACCESS_PERMISSION,
+)
 FEATURE_LEADS = "lead_management"
 FEATURE_PROJECTS = "project_management"
 FEATURE_RECORDS = "records"
