@@ -586,6 +586,7 @@ def test_membership_migration_preserves_archived_projects(tmp_path) -> None:
         "007_reminders.sql",
         "008_imports.sql",
         "009_tenant_roles.sql",
+        "010_tenant_role_assignments.sql",
     ]
     assert connection.execute("SELECT COUNT(*) AS count FROM reminder_deliveries").fetchone()["count"] == 0
     assert connection.execute("SELECT COUNT(*) AS count FROM import_jobs").fetchone()["count"] == 0

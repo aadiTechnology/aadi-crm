@@ -15,6 +15,7 @@ LEADS_PERMISSION = "crm.lead_management.read"
 REGISTERED_CRM_PERMISSION = LEADS_PERMISSION
 # Grant catalog for tenant-defined CRM roles. These identifiers already exist.
 # The catalog is not a feature entitlement list and does not change ACTIONS.
+# effective_module_keys uses it only to narrow Control Plane keys.
 SUPPORTED_CRM_PERMISSIONS = (
     LEADS_PERMISSION,
     PROJECT_ACCESS_PERMISSION,
@@ -90,6 +91,28 @@ class ProjectAccess:
             "can_access_records": self.allows("access_records"),
             "record_scope": self.record_scope(),
         }
+
+
+def effective_module_keys(
+    control_plane_keys: list[str],
+    *,
+    assigned: bool,
+    granted: frozenset[str],
+) -> list[str]:
+    """Return the keys a CRM module gate may use.
+
+    A user with no CRM role-assignment rows keeps the Control Plane keys.
+    A user with any assignment row keeps a catalog key only when a currently
+    valid role grants it and the Control Plane also returned it. Keys outside
+    the catalog stay as the Control Plane sent them. This does not add keys,
+    change ACTIONS, or decide feature entitlement.
+    """
+
+    if not assigned:
+        return list(control_plane_keys)
+    catalog = frozenset(SUPPORTED_CRM_PERMISSIONS)
+    allowed = granted & catalog
+    return [key for key in control_plane_keys if key not in catalog or key in allowed]
 
 
 def project_module_allowed(keys: list[str]) -> bool:

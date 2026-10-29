@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.shell import get_platform_client
 from app.main import create_app
-from app.platform_client import PlatformCallError, ProductAccessView
+from app.platform_client import IdentityView, PlatformCallError, ProductAccessView
 
 TENANT_A = UUID("11111111-1111-4111-8111-111111111111")
 TENANT_B = UUID("22222222-2222-4222-8222-222222222222")
@@ -37,6 +37,13 @@ class FakePlatform:
         if isinstance(result, PlatformCallError):
             raise result
         return result
+
+    def identity(self, cookie: str | None) -> IdentityView:
+        del cookie
+        return IdentityView(
+            user_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            email="member@example.com",
+        )
 
 
 def _access(
@@ -177,7 +184,9 @@ def test_missing_permission_denies_leads_when_the_product_is_available() -> None
     assert platform.permission_calls == [str(TENANT_A)]
 
 
-def test_authorized_leads_stub_is_empty() -> None:
+def test_authorized_leads_stub_is_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CRM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("CRM_DATABASE_PATH", str(tmp_path / "shell.sqlite"))
     platform = FakePlatform()
     platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, available=True)
     platform.permissions_by_tenant[str(TENANT_A)] = [LEADS, "users.read"]

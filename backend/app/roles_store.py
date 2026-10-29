@@ -8,9 +8,14 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.db import MissingTenantMembership
+from app.project_access import effective_module_keys
 
 _ROLE_COLUMNS = (
     "id, tenant_id, name, description, status, created_by, updated_by, "
+    "created_at, updated_at, tenant_membership_id"
+)
+_ASSIGNMENT_COLUMNS = (
+    "id, tenant_id, role_id, user_id, status, created_by, updated_by, "
     "created_at, updated_at, tenant_membership_id"
 )
 
@@ -252,6 +257,167 @@ def revoke_tenant_role_permission(
     return get_tenant_role(connection, tenant_id, role_id)
 
 
+@dataclass(frozen=True)
+class TenantRoleAssignment:
+    """A user's CRM role. tenant_membership_id is the subject's membership, not the actor's."""
+
+    id: str
+    tenant_id: str
+    role_id: str
+    user_id: str
+    status: str
+    created_at: str
+    updated_at: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "role_id": self.role_id,
+            "user_id": self.user_id,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+def list_role_assignments(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    role_id: str,
+) -> list[TenantRoleAssignment]:
+    rows = connection.execute(
+        f"""
+        SELECT {_ASSIGNMENT_COLUMNS}
+        FROM tenant_role_assignments
+        WHERE tenant_id = ? AND role_id = ?
+        ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, user_id, id
+        """,
+        (tenant_id, role_id),
+    ).fetchall()
+    return [_assignment(row) for row in rows]
+
+
+def assign_tenant_role(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    role_id: str,
+    user_id: str,
+    tenant_membership_id: str,
+    actor_id: str,
+) -> tuple[TenantRoleAssignment, bool] | None:
+    """Bind the role to the subject's current membership. Returns whether a row was created.
+
+    An inactive role is rejected. A missing role returns None. Assigning the same
+    active role again keeps one active row and refreshes a stale membership id.
+    """
+
+    _require_membership(tenant_membership_id)
+    current = get_tenant_role(connection, tenant_id, role_id)
+    if current is None:
+        return None
+    if current.status != "active":
+        raise InactiveTenantRole
+    existing = _active_assignment(connection, tenant_id, role_id, user_id)
+    now = _now()
+    if existing is not None:
+        connection.execute(
+            """
+            UPDATE tenant_role_assignments
+            SET tenant_membership_id = ?, updated_by = ?, updated_at = ?
+            WHERE tenant_id = ? AND id = ? AND status = 'active'
+            """,
+            (tenant_membership_id, actor_id, now, tenant_id, existing["id"]),
+        )
+        connection.commit()
+        refreshed = _assignment_by_id(connection, tenant_id, existing["id"])
+        if refreshed is None:
+            raise RuntimeError("The role assignment was not stored.")
+        return refreshed, False
+    assignment_id = str(uuid4())
+    try:
+        connection.execute(
+            f"""
+            INSERT INTO tenant_role_assignments ({_ASSIGNMENT_COLUMNS})
+            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+            """,
+            (
+                assignment_id,
+                tenant_id,
+                role_id,
+                user_id,
+                actor_id,
+                actor_id,
+                now,
+                now,
+                tenant_membership_id,
+            ),
+        )
+        connection.commit()
+    except sqlite3.IntegrityError:
+        connection.rollback()
+        raced = _active_assignment(connection, tenant_id, role_id, user_id)
+        if raced is None:
+            raise
+        return _assignment(raced), False
+    created = _assignment_by_id(connection, tenant_id, assignment_id)
+    if created is None:
+        raise RuntimeError("The role assignment was not stored.")
+    return created, True
+
+
+def revoke_tenant_role_assignment(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    role_id: str,
+    user_id: str,
+    actor_id: str,
+) -> TenantRoleAssignment | None:
+    """Mark the active assignment revoked. The row stays so an empty grant does not fall open."""
+
+    existing = _active_assignment(connection, tenant_id, role_id, user_id)
+    if existing is None:
+        return None
+    connection.execute(
+        """
+        UPDATE tenant_role_assignments
+        SET status = 'revoked', updated_by = ?, updated_at = ?
+        WHERE tenant_id = ? AND id = ? AND status = 'active'
+        """,
+        (actor_id, _now(), tenant_id, existing["id"]),
+    )
+    connection.commit()
+    revoked = _assignment_by_id(connection, tenant_id, existing["id"])
+    if revoked is None:
+        raise RuntimeError("The role assignment was not updated.")
+    return revoked
+
+
+def module_keys_for_member(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    user_id: str,
+    tenant_membership_id: str,
+    control_plane_keys: list[str],
+) -> list[str]:
+    """Intersect catalog keys with valid CRM role grants when any assignment exists."""
+
+    assigned, granted = _valid_role_grants(
+        connection,
+        tenant_id,
+        user_id,
+        tenant_membership_id,
+    )
+    return effective_module_keys(
+        control_plane_keys,
+        assigned=assigned,
+        granted=granted,
+    )
+
+
 def permission_granted(
     connection: sqlite3.Connection,
     tenant_id: str,
@@ -323,6 +489,101 @@ def _role(row: sqlite3.Row, permissions: tuple[str, ...]) -> TenantRole:
         updated_at=row["updated_at"],
         permissions=permissions,
     )
+
+
+def _active_assignment(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    role_id: str,
+    user_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        f"""
+        SELECT {_ASSIGNMENT_COLUMNS}
+        FROM tenant_role_assignments
+        WHERE tenant_id = ? AND role_id = ? AND user_id = ? AND status = 'active'
+        """,
+        (tenant_id, role_id, user_id),
+    ).fetchone()
+
+
+def _assignment_by_id(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    assignment_id: str,
+) -> TenantRoleAssignment | None:
+    row = connection.execute(
+        f"""
+        SELECT {_ASSIGNMENT_COLUMNS}
+        FROM tenant_role_assignments
+        WHERE tenant_id = ? AND id = ?
+        """,
+        (tenant_id, assignment_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return _assignment(row)
+
+
+def _assignment(row: sqlite3.Row) -> TenantRoleAssignment:
+    return TenantRoleAssignment(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        role_id=row["role_id"],
+        user_id=row["user_id"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _valid_role_grants(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    user_id: str,
+    tenant_membership_id: str,
+) -> tuple[bool, frozenset[str]]:
+    """Whether any assignment row exists, and the permissions of the valid ones.
+
+    A valid row is active, on an active role, and bound to the membership id
+    presented for this request. Revoked, inactive, and stale rows still count
+    as assignments, so they do not fall back to the Control Plane catalog keys.
+    """
+
+    found = connection.execute(
+        """
+        SELECT id
+        FROM tenant_role_assignments
+        WHERE tenant_id = ? AND user_id = ?
+        LIMIT 1
+        """,
+        (tenant_id, user_id),
+    ).fetchone()
+    if found is None:
+        return False, frozenset()
+    membership_id = str(tenant_membership_id).strip()
+    if not membership_id:
+        return True, frozenset()
+    rows = connection.execute(
+        """
+        SELECT DISTINCT permission_key
+        FROM tenant_role_assignments AS assignments
+        JOIN tenant_roles AS roles
+          ON roles.id = assignments.role_id
+         AND roles.tenant_id = assignments.tenant_id
+        JOIN tenant_role_permissions AS grants
+          ON grants.role_id = assignments.role_id
+         AND grants.tenant_id = assignments.tenant_id
+        WHERE assignments.tenant_id = ?
+          AND assignments.user_id = ?
+          AND assignments.status = 'active'
+          AND roles.status = 'active'
+          AND assignments.tenant_membership_id = ?
+        ORDER BY permission_key
+        """,
+        (tenant_id, user_id, membership_id),
+    ).fetchall()
+    return True, frozenset(row["permission_key"] for row in rows)
 
 
 def _require_membership(tenant_membership_id: str) -> None:

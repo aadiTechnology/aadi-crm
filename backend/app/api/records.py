@@ -58,7 +58,9 @@ def _validation(message: str, fields: dict[str, str] | None = None) -> JSONRespo
 
 
 def _open(tenant_id, project_id, request, platform, connection, *, write: bool):
-    opened = _open_module(tenant_id, request, platform, write=write, feature_key=FEATURE_RECORDS)
+    opened = _open_module(
+        tenant_id, request, platform, connection, write=write, feature_key=FEATURE_RECORDS
+    )
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "access_records")

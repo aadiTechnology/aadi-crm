@@ -7,8 +7,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from app.db import open_database
 from app.platform_client import PlatformCallError, PlatformClient
 from app.project_access import FEATURE_LEADS, FEATURE_RECORDS, records_module_allowed
+from app.roles_store import module_keys_for_member
 
 LEADS_PERMISSION = "crm.lead_management.read"
 
@@ -83,30 +85,38 @@ def read_leads(
     access, failure = _load_access(tenant_id, request, platform)
     if failure is not None or access is None:
         return failure if failure is not None else _error(404)
+    cookie = _cookie(request)
     try:
-        keys = platform.permissions(str(tenant_id), _cookie(request))
+        keys = platform.permissions(str(tenant_id), cookie)
     except PlatformCallError as exc:
         return _error(exc.status_code)
     if not access.available or FEATURE_LEADS not in access.features or LEADS_PERMISSION not in keys:
         return _error(403)
-    if FEATURE_RECORDS not in access.features or not records_module_allowed(keys):
-        return JSONResponse(status_code=200, content={"module": "leads", "items": []})
-    cookie = _cookie(request)
     try:
         identity = platform.identity(cookie)
     except PlatformCallError as exc:
         return _error(exc.status_code)
     from app.api.projects import Caller
-    from app.db import open_database
     from app.leads_store import visible_leads
 
-    caller = Caller(
-        user_id=identity.user_id,
-        email=identity.email,
-        keys=keys,
-        tenant_membership_id=access.membership_id,
-    )
     with open_database() as connection:
+        keys = module_keys_for_member(
+            connection,
+            tenant_id=str(tenant_id),
+            user_id=identity.user_id,
+            tenant_membership_id=access.membership_id,
+            control_plane_keys=keys,
+        )
+        if LEADS_PERMISSION not in keys:
+            return _error(403)
+        if FEATURE_RECORDS not in access.features or not records_module_allowed(keys):
+            return JSONResponse(status_code=200, content={"module": "leads", "items": []})
+        caller = Caller(
+            user_id=identity.user_id,
+            email=identity.email,
+            keys=keys,
+            tenant_membership_id=access.membership_id,
+        )
         items = visible_leads(connection, str(tenant_id), caller)
     if items:
         emails = _assignee_emails(platform, tenant_id, cookie)

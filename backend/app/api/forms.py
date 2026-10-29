@@ -91,7 +91,7 @@ _TYPE_KEYS = {
 
 
 def _open_form_project(tenant_id, project_id, request, platform, connection, *, write: bool, action: str):
-    opened = _open_module(tenant_id, request, platform, write=write)
+    opened = _open_module(tenant_id, request, platform, connection, write=write)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, action)

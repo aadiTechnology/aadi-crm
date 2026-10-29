@@ -37,6 +37,7 @@ from app.db import (
     update_project,
 )
 from app.platform_client import PlatformCallError, PlatformClient, TenantUserView
+from app.roles_store import module_keys_for_member
 from app.project_access import (
     PROJECT_MEMBER,
     PROJECT_MANAGER,
@@ -134,6 +135,7 @@ def _open_module(
     tenant_id: UUID,
     request: Request,
     platform: PlatformClient,
+    connection,
     *,
     write: bool,
     feature_key: str = FEATURE_PROJECTS,
@@ -159,6 +161,15 @@ def _open_module(
         identity = platform.identity(cookie)
     except PlatformCallError as exc:
         return _error(exc.status_code)
+    keys = module_keys_for_member(
+        connection,
+        tenant_id=str(tenant_id),
+        user_id=identity.user_id,
+        tenant_membership_id=access.membership_id,
+        control_plane_keys=keys,
+    )
+    if not _module_permission(feature_key, keys):
+        return _error(403)
     return Caller(
         user_id=identity.user_id,
         email=identity.email,
@@ -329,7 +340,7 @@ def read_projects(
     q: str = "",
     status: str = "",
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, connection, write=False)
     if isinstance(opened, JSONResponse):
         return opened
     query = q.strip()
@@ -365,7 +376,7 @@ async def post_project(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     payload = await _body(request)
@@ -408,7 +419,7 @@ def read_project(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, connection, write=False)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "view_project")
@@ -426,7 +437,7 @@ async def patch_project(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "update_project")
@@ -470,7 +481,7 @@ def post_archive(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "archive_project")
@@ -491,7 +502,7 @@ def read_members(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, connection, write=False)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "list_members")
@@ -519,7 +530,7 @@ def read_eligible_users(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=False)
+    opened = _open_module(tenant_id, request, platform, connection, write=False)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "add_member")
@@ -549,7 +560,7 @@ async def post_member(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "add_member")
@@ -599,7 +610,7 @@ async def patch_member(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "assign_role")
@@ -640,7 +651,7 @@ def post_remove_member(
     platform: Annotated[PlatformClient, Depends(get_platform_client)],
     connection: Annotated[object, Depends(get_connection)],
 ) -> JSONResponse:
-    opened = _open_module(tenant_id, request, platform, write=True)
+    opened = _open_module(tenant_id, request, platform, connection, write=True)
     if isinstance(opened, JSONResponse):
         return opened
     loaded = _load_project(connection, tenant_id, project_id, opened, "remove_member")

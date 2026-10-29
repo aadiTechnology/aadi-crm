@@ -215,12 +215,15 @@ def _tenant_user(payload: object) -> TenantUserView:
     email = payload.get("email")
     identity_active = payload.get("identity_active")
     membership_status = payload.get("membership_status")
+    membership_id = payload.get("membership_id")
     if (
         not isinstance(user_id, str)
         or not isinstance(email, str)
         or not email.strip()
         or not isinstance(identity_active, bool)
         or membership_status not in {"active", "inactive"}
+        or not isinstance(membership_id, str)
+        or not _uuid(membership_id)
     ):
         raise PlatformCallError(502)
     try:
@@ -232,6 +235,7 @@ def _tenant_user(payload: object) -> TenantUserView:
         email=email,
         identity_active=identity_active,
         membership_status=membership_status,
+        membership_id=membership_id,
     )
 
 
