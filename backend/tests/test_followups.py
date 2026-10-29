@@ -3,11 +3,25 @@
 import shutil
 from datetime import UTC, datetime, timedelta
 
-from app.db import MIGRATIONS, apply_migrations, connect
+from app.db import MIGRATIONS, apply_migrations, connect, database_path
 from app.followups_store import QUEUE_ZONE, queue_for, queue_window, utc_due
 from app.followups_store import FollowUpValidation
+from app.platform_client import PlatformCallError
 from tests.test_forms import DEV_DATABASE
-from tests.test_projects import OTHER_ID, OUTSIDE_ID, TENANT_A, TENANT_B, USER_ID, FakePlatform, _allow, _become, _client, _headers, _person
+from tests.test_projects import (
+    MEMBERSHIP_ID,
+    OTHER_ID,
+    OUTSIDE_ID,
+    TENANT_A,
+    TENANT_B,
+    USER_ID,
+    FakePlatform,
+    _allow,
+    _become,
+    _client,
+    _headers,
+    _person,
+)
 from tests.test_records import _create, _file_snapshot, _ready
 
 
@@ -508,3 +522,88 @@ def test_follow_up_owner_can_open_only_the_related_record(tmp_path, monkeypatch)
     closed = client.get(base, headers=_headers(write=False))
     assert closed.status_code == 404
     assert "Owned school" not in closed.text
+
+
+STALE_MEMBERSHIP = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+
+def _set_binding(project_id: str, user_id: str, value: str | None) -> None:
+    connection = connect(database_path())
+    connection.execute(
+        "UPDATE project_memberships SET tenant_membership_id = ? WHERE project_id = ? AND user_id = ?",
+        (value, project_id, user_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def _reject_owner(client, base: str, owner_id: str) -> None:
+    denied = client.post(
+        f"{base}/follow-ups",
+        headers=_headers(write=True),
+        json=_body(task_type="note", owner_user_id=owner_id, call_status=None),
+    )
+    assert denied.status_code == 422
+    assert "active member" in denied.json()["error"]["fields"]["owner_user_id"]
+
+
+def test_follow_up_creation_rejects_a_null_or_stale_owner_binding(tmp_path, monkeypatch) -> None:
+    platform = _platform()
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id, form_id, _version = _ready(client)
+    created = _create(client, project_id, form_id, {"school_name": "Bound school"})
+    assert created.status_code == 201
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    base = f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{created.json()['id']}"
+    accepted = _add(client, base, owner_user_id=OTHER_ID, task_type="note", call_status=None, summary="Current binding")
+    assert accepted["owner_user_id"] == OTHER_ID
+    _set_binding(project_id, OTHER_ID, None)
+    _reject_owner(client, base, OTHER_ID)
+    _set_binding(project_id, OTHER_ID, STALE_MEMBERSHIP)
+    _reject_owner(client, base, OTHER_ID)
+    _set_binding(project_id, OTHER_ID, MEMBERSHIP_ID)
+    restored = _add(client, base, owner_user_id=OTHER_ID, task_type="note", call_status=None, summary="Bound again")
+    assert restored["owner_user_id"] == OTHER_ID
+    del platform
+
+
+def test_directory_forbidden_does_not_accept_an_unbound_or_stale_owner(tmp_path, monkeypatch) -> None:
+    platform = _platform()
+    client = _client(tmp_path, monkeypatch, platform)
+    project_id, form_id, _version = _ready(client)
+    created = _create(client, project_id, form_id, {"school_name": "Directory school"})
+    assert created.status_code == 201
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    base = f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{created.json()['id']}"
+    platform.users_by_tenant[str(TENANT_A)] = PlatformCallError(403)
+    own = _add(client, base, owner_user_id=USER_ID, task_type="note", call_status=None, summary="Caller stays bound")
+    assert own["owner_user_id"] == USER_ID
+    _reject_owner(client, base, OTHER_ID)
+    _set_binding(project_id, OTHER_ID, None)
+    _reject_owner(client, base, OTHER_ID)
+    _set_binding(project_id, OTHER_ID, STALE_MEMBERSHIP)
+    _reject_owner(client, base, OTHER_ID)
+    _set_binding(project_id, USER_ID, None)
+    hidden = client.post(
+        f"{base}/follow-ups",
+        headers=_headers(write=True),
+        json=_body(task_type="note", owner_user_id=USER_ID, call_status=None),
+    )
+    assert hidden.status_code == 404
+    _set_binding(project_id, USER_ID, STALE_MEMBERSHIP)
+    stale_caller = client.post(
+        f"{base}/follow-ups",
+        headers=_headers(write=True),
+        json=_body(task_type="note", owner_user_id=USER_ID, call_status=None),
+    )
+    assert stale_caller.status_code == 404

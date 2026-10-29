@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from app.db import membership_binding_matches
 from app.followups_store import civil_due
 
 STAMP = "%Y-%m-%dT%H:%M:%S.%f+00:00"
@@ -134,6 +135,7 @@ def process_reminders(
     *,
     tenant_id: str,
     actor_user_id: str,
+    tenant_membership_id: str,
     mode: str,
     adapter,
     emails: dict[str, str] | None = None,
@@ -141,7 +143,7 @@ def process_reminders(
 ) -> dict[str, int]:
     """Attempt each eligible row at most once during this call."""
 
-    projects = managed_project_ids(connection, tenant_id, actor_user_id)
+    projects = managed_project_ids(connection, tenant_id, actor_user_id, tenant_membership_id)
     known_emails = emails or {}
     suppressed = 0
     if projects:
@@ -271,16 +273,31 @@ def retry_delivery(
     ).fetchone()
 
 
-def managed_project_ids(connection: sqlite3.Connection, tenant_id: str, user_id: str) -> list[str]:
+def managed_project_ids(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    user_id: str,
+    tenant_membership_id: str,
+) -> list[str]:
+    """Manager projects whose stored membership id is the caller's current one.
+
+    A null or replaced tenant membership does not authorize project-wide reminder
+    review or delivery. The caller's own recipient rows are a separate path.
+    """
+
     rows = connection.execute(
         """
-        SELECT project_id FROM project_memberships
+        SELECT project_id, tenant_membership_id FROM project_memberships
         WHERE tenant_id = ? AND user_id = ? AND role = 'project_manager' AND status = 'active'
         ORDER BY project_id
         """,
         (tenant_id, user_id),
     )
-    return [str(row["project_id"]) for row in rows]
+    return [
+        str(row["project_id"])
+        for row in rows
+        if membership_binding_matches(row["tenant_membership_id"], tenant_membership_id)
+    ]
 
 
 def idempotency_key(

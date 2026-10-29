@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from app.db import connect
+from app.db import connect, database_path
 from app.reminders_store import MAX_ATTEMPTS, backoff_seconds
 from tests.test_followups import _add, _body, _platform
 from tests.test_projects import (
@@ -303,3 +303,90 @@ def test_reminders_do_not_cross_tenants_or_bypass_record_access(tmp_path, monkey
     assert after.json()["items"]
     assert all(item["record_available"] is False for item in after.json()["items"])
     assert record["public_number"] not in after.text
+
+
+STALE_MEMBERSHIP = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+
+def _set_binding(project_id: str, user_id: str, value: str | None) -> None:
+    connection = connect(database_path())
+    connection.execute(
+        "UPDATE project_memberships SET tenant_membership_id = ? WHERE project_id = ? AND user_id = ?",
+        (value, project_id, user_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def _delivery_snapshot(follow_up_id: str) -> list[tuple[str, str, int, str]]:
+    connection = connect(database_path())
+    rows = [
+        (row["channel"], row["state"], row["attempt_count"], row["recipient_user_id"])
+        for row in connection.execute(
+            """
+            SELECT channel, state, attempt_count, recipient_user_id
+            FROM reminder_deliveries
+            WHERE follow_up_id = ?
+            ORDER BY channel
+            """,
+            (follow_up_id,),
+        )
+    ]
+    connection.close()
+    return rows
+
+
+def _invalid_manager_binding(tmp_path, monkeypatch, stored: str | None) -> None:
+    platform, client, project_id, _record, base = _setup(tmp_path, monkeypatch)
+    _add(client, base, summary="Manager inbox", task_type="note", call_status=None)
+    added = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/members",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID, "role": "project_member"},
+    )
+    assert added.status_code == 201
+    _add(client, base, summary="Project reminder", task_type="note", call_status=None, owner_user_id=OTHER_ID)
+    reviewed = _process(client, outcome="terminal")
+    assert reviewed["failed"] >= 1
+    failures = client.get(f"/api/v1/tenants/{TENANT_A}/reminders/failures", headers=_headers(write=False))
+    assert failures.status_code == 200
+    reminder_id = failures.json()["items"][0]["id"]
+    inbox = client.get(f"/api/v1/tenants/{TENANT_A}/reminders", headers=_headers(write=False))
+    assert inbox.status_code == 200
+    own_ids = {item["id"] for item in inbox.json()["items"]}
+    assert own_ids
+    pending = _add(
+        client,
+        base,
+        summary="Leave this pending",
+        task_type="note",
+        call_status=None,
+        owner_user_id=OTHER_ID,
+    )
+    before = _delivery_snapshot(pending["id"])
+    assert before
+    assert {row[1] for row in before} == {"pending"}
+    _set_binding(project_id, USER_ID, stored)
+    kept = client.get(f"/api/v1/tenants/{TENANT_A}/reminders", headers=_headers(write=False))
+    assert kept.status_code == 200
+    assert own_ids <= {item["id"] for item in kept.json()["items"]}
+    denied = client.get(f"/api/v1/tenants/{TENANT_A}/reminders/failures", headers=_headers(write=False))
+    assert denied.status_code == 403
+    assert reminder_id not in denied.text
+    blocked = client.post(
+        f"/api/v1/tenants/{TENANT_A}/reminders/{reminder_id}/retry",
+        headers=_headers(write=True),
+    )
+    assert blocked.status_code == 403
+    result = _process(client)
+    assert result["claimed"] == 0
+    assert _delivery_snapshot(pending["id"]) == before
+    del platform
+
+
+def test_null_manager_binding_cannot_review_or_process_project_reminders(tmp_path, monkeypatch) -> None:
+    _invalid_manager_binding(tmp_path, monkeypatch, None)
+
+
+def test_stale_manager_binding_cannot_review_or_process_project_reminders(tmp_path, monkeypatch) -> None:
+    _invalid_manager_binding(tmp_path, monkeypatch, STALE_MEMBERSHIP)

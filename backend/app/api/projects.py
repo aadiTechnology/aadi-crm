@@ -20,6 +20,7 @@ from app.db import (
     MembershipRow,
     ProjectRow,
     active_membership,
+    membership_binding_matches,
     apply_migrations,
     archive_project,
     connect,
@@ -173,17 +174,9 @@ def _project_body(project: ProjectRow, access: ProjectAccess) -> dict[str, objec
 
 
 def _binding_matches(membership, caller: Caller) -> bool:
-    """A project role applies only to the membership id stored at grant time.
+    """A project role applies only to the membership id stored at grant time."""
 
-    A blank binding is historical. It does not authorize the current sign-in,
-    including a person whose tenant membership was removed and created again.
-    """
-
-    bound = (membership.tenant_membership_id or "").strip()
-    current = (caller.tenant_membership_id or "").strip()
-    if not bound or not current:
-        return False
-    return bound == current
+    return membership_binding_matches(membership.tenant_membership_id, caller.tenant_membership_id)
 
 
 def _access_for_user(connection, tenant_id: str, project_id: str, caller: Caller) -> ProjectAccess:

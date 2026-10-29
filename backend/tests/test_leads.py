@@ -1,7 +1,7 @@
 """Leads list the project records the caller can already open."""
 
 from app.db import connect
-from tests.test_followups import _add
+from tests.test_followups import _add, _body
 from tests.test_projects import (
     LEADS,
     MANAGE,
@@ -227,11 +227,13 @@ def test_manager_can_assign_a_record_and_other_callers_cannot(tmp_path, monkeypa
     )
     assert kept.json()["assignee_user_id"] == USER_ID
 
-    _add(
-        client,
-        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{second.json()['id']}",
-        owner_user_id=OTHER_ID,
+    stale_owner = client.post(
+        f"/api/v1/tenants/{TENANT_A}/projects/{project_id}/records/{second.json()['id']}/follow-ups",
+        headers=_headers(write=True),
+        json=_body(owner_user_id=OTHER_ID),
     )
+    assert stale_owner.status_code == 422
+    assert "active member" in stale_owner.json()["error"]["fields"]["owner_user_id"]
     _become(platform, OTHER_ID, "member@example.com")
     platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=OTHER_MEMBERSHIP)
     hidden = client.post(

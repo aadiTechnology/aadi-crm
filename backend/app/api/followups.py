@@ -15,7 +15,7 @@ from app.api.projects import _body, _error, _lookup_user, get_connection
 from app.api.records import _allowed, _archived, _open, _validation
 from app.api.shell import get_platform_client
 from app.platform_client import PlatformClient, TenantUserView
-from app.db import active_membership
+from app.db import active_membership, membership_binding_matches
 from app.followups_store import (
     QUEUES,
     QUEUE_ZONE,
@@ -77,28 +77,43 @@ def _readable_record(connection, tenant_id: str, project_id: str, record_id: str
     return _error(404)
 
 
-def _owner(connection, platform: PlatformClient, tenant_id: UUID, project_id: UUID, owner_id: object, request: Request):
+def _owner(connection, platform: PlatformClient, tenant_id: UUID, project_id: UUID, owner_id: object, request: Request, caller):
+    """Accept an owner only when that project row is bound to the current membership.
+
+    A directory 403 does not prove another person's membership is current, so it
+    cannot accept that project row. The signed-in caller can still own a follow-up
+    when their own stored id matches the membership on this request.
+    """
+
     if not isinstance(owner_id, str):
         return _validation("Choose an owner.", {"owner_user_id": "Owner must be an active member of this project."})
     try:
         parsed = str(UUID(owner_id))
     except ValueError:
         return _validation("Choose an owner.", {"owner_user_id": "Owner must be an active member of this project."})
-    if active_membership(connection, str(tenant_id), str(project_id), parsed) is None:
+    membership = active_membership(connection, str(tenant_id), str(project_id), parsed)
+    if membership is None:
         return _validation(
             "Choose an owner.",
             {"owner_user_id": "Owner must be an active member of this project."},
         )
     looked = _lookup_user(platform, tenant_id, parsed, request)
     if isinstance(looked, JSONResponse):
-        if looked.status_code == 403:
+        if looked.status_code == 403 and parsed == caller.user_id and membership_binding_matches(
+            membership.tenant_membership_id, caller.tenant_membership_id
+        ):
             return parsed
-        if looked.status_code in {404, 422}:
+        if looked.status_code in {403, 404, 422}:
             return _validation(
                 "Choose an owner.",
                 {"owner_user_id": "Owner must be an active member of this project."},
             )
         return looked
+    if not membership_binding_matches(membership.tenant_membership_id, looked.membership_id):
+        return _validation(
+            "Choose an owner.",
+            {"owner_user_id": "Owner must be an active member of this project."},
+        )
     return parsed
 
 
@@ -219,7 +234,7 @@ async def post_follow_up(
         return payload
     if not set(payload).issubset(_CREATE_FIELDS):
         return _validation("Request validation failed.")
-    parsed = _follow_up_body(connection, platform, tenant_id, project_id, payload, request)
+    parsed = _follow_up_body(connection, platform, tenant_id, project_id, payload, request, caller)
     if isinstance(parsed, JSONResponse):
         return parsed
     try:
@@ -304,7 +319,7 @@ async def patch_follow_up(
         "summary": payload.get("summary", current["summary"]),
         "call_status": payload["call_status"] if "call_status" in payload else current["call_status"],
     }
-    parsed = _follow_up_body(connection, platform, tenant_id, project_id, merged, request)
+    parsed = _follow_up_body(connection, platform, tenant_id, project_id, merged, request, caller)
     if isinstance(parsed, JSONResponse):
         return parsed
     try:
@@ -506,7 +521,7 @@ def _schedule(connection, platform, tenant_id, caller, request, follow_up) -> No
     )
 
 
-def _follow_up_body(connection, platform, tenant_id, project_id, payload, request):
+def _follow_up_body(connection, platform, tenant_id, project_id, payload, request, caller):
     task_type = payload.get("task_type", "")
     due_date = payload.get("due_date", "")
     due_time = payload.get("due_time", "")
@@ -515,7 +530,7 @@ def _follow_up_body(connection, platform, tenant_id, project_id, payload, reques
         return _validation("Request validation failed.")
     if not isinstance(summary, str):
         return _validation("Request validation failed.", {"summary": "Summary must be text."})
-    owner = _owner(connection, platform, tenant_id, project_id, payload.get("owner_user_id", ""), request)
+    owner = _owner(connection, platform, tenant_id, project_id, payload.get("owner_user_id", ""), request, caller)
     if isinstance(owner, JSONResponse):
         return owner
     call_status = payload.get("call_status")

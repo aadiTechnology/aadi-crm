@@ -555,6 +555,20 @@ def get_project_membership(
     return _member(row)
 
 
+def membership_binding_matches(stored: str | None, current: str | None) -> bool:
+    """A project role applies only when both membership ids are present and equal.
+
+    A blank stored id is historical. It does not authorize the current sign-in,
+    including a person whose tenant membership was removed and created again.
+    """
+
+    bound = (stored or "").strip()
+    present = (current or "").strip()
+    if not bound or not present:
+        return False
+    return bound == present
+
+
 def active_membership(
     connection: sqlite3.Connection,
     tenant_id: str,

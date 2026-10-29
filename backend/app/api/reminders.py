@@ -145,7 +145,9 @@ def read_failures(
     opened = _open_module(tenant_id, request, platform, write=False, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
-    projects = managed_project_ids(connection, str(tenant_id), opened.user_id)
+    projects = managed_project_ids(
+        connection, str(tenant_id), opened.user_id, opened.tenant_membership_id
+    )
     if not projects:
         return _error(403, "You do not have permission to perform this action.")
     rows = list_failures(connection, str(tenant_id), projects)
@@ -164,7 +166,9 @@ def post_process(
     if isinstance(opened, JSONResponse):
         return opened
     mode = email_mode()
-    projects = managed_project_ids(connection, str(tenant_id), opened.user_id)
+    projects = managed_project_ids(
+        connection, str(tenant_id), opened.user_id, opened.tenant_membership_id
+    )
     resolved: dict[str, str] = {}
     for owner in open_owner_ids(connection, str(tenant_id), projects):
         looked = _lookup_user(platform, tenant_id, owner, request)
@@ -176,6 +180,7 @@ def post_process(
         connection,
         tenant_id=str(tenant_id),
         actor_user_id=opened.user_id,
+        tenant_membership_id=opened.tenant_membership_id,
         mode=mode,
         adapter=build_adapter(mode, _test_outcome(request)),
         emails=resolved,
@@ -218,7 +223,9 @@ def post_retry(
     opened = _open_module(tenant_id, request, platform, write=True, feature_key=FEATURE_RECORDS)
     if isinstance(opened, JSONResponse):
         return opened
-    projects = managed_project_ids(connection, str(tenant_id), opened.user_id)
+    projects = managed_project_ids(
+        connection, str(tenant_id), opened.user_id, opened.tenant_membership_id
+    )
     if not projects:
         return _error(403, "You do not have permission to perform this action.")
     row = retry_delivery(
