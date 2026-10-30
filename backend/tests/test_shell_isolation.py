@@ -88,6 +88,7 @@ def test_inactive_membership_returns_not_found_without_foreign_name() -> None:
     )
     assert response.status_code == 404
     assert "Other Org" not in response.text
+    assert "module_permissions" not in response.text
     assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
@@ -105,9 +106,12 @@ def test_platform_tenant_mismatch_hides_the_other_tenant() -> None:
     assert str(TENANT_B) not in response.text
 
 
-def test_query_and_body_tenant_ids_do_not_select_the_platform_tenant() -> None:
+def test_query_and_body_tenant_ids_do_not_select_the_platform_tenant(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CRM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("CRM_DATABASE_PATH", str(tmp_path / "shell.sqlite"))
     platform = FakePlatform()
     platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, available=True)
+    platform.permissions_by_tenant[str(TENANT_A)] = [LEADS, "roles.manage", "users.read", "audit.read"]
     response = _client(platform).request(
         "GET",
         f"/api/v1/shell/tenants/{TENANT_A}",
@@ -115,7 +119,12 @@ def test_query_and_body_tenant_ids_do_not_select_the_platform_tenant() -> None:
         json={"tenant_id": str(TENANT_B)},
     )
     assert response.status_code == 200
-    assert response.json()["tenant_id"] == str(TENANT_A)
+    body = response.json()
+    assert body["tenant_id"] == str(TENANT_A)
+    assert body["module_permissions"] == [LEADS]
+    assert "roles.manage" not in body["module_permissions"]
+    assert "users.read" not in body["module_permissions"]
+    assert "audit.read" not in body["module_permissions"]
     assert platform.access_calls == [str(TENANT_A)]
 
 
@@ -125,12 +134,39 @@ def test_unavailable_entitlement_denies_leads_and_keeps_the_shell_readable() -> 
     platform.permissions_by_tenant[str(TENANT_A)] = [LEADS]
     client = _client(platform)
     shell = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
-    leads = client.get(f"/api/v1/shell/tenants/{TENANT_A}/leads")
     assert shell.status_code == 200
     assert shell.json()["available"] is False
+    assert shell.json()["module_permissions"] == []
+    assert platform.permission_calls == []
+    leads = client.get(f"/api/v1/shell/tenants/{TENANT_A}/leads")
     assert leads.status_code == 403
     assert leads.json()["error"]["code"] == "FORBIDDEN"
     assert "items" not in leads.text
+
+
+def test_shell_omits_a_feature_the_subscription_does_not_include(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CRM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("CRM_DATABASE_PATH", str(tmp_path / "shell.sqlite"))
+    platform = FakePlatform()
+    platform.access_by_tenant[str(TENANT_A)] = _access(
+        TENANT_A,
+        available=True,
+        features=("project_management", "records"),
+    )
+    platform.permissions_by_tenant[str(TENANT_A)] = [
+        LEADS,
+        "crm.project_management.access",
+        "crm.project_management.manage",
+        "crm.records.access",
+        "roles.manage",
+    ]
+    response = _client(platform).get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert response.status_code == 200
+    assert response.json()["module_permissions"] == [
+        "crm.project_management.access",
+        "crm.project_management.manage",
+        "crm.records.access",
+    ]
 
 
 def test_missing_lead_feature_denies_leads_when_the_permission_is_present() -> None:

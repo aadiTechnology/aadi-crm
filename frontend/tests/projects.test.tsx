@@ -274,6 +274,9 @@ describe('shell project entry', () => {
           features: ['lead_management', 'project_management', 'records'],
         })
       }
+      if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+        return json({ module_permissions: [] })
+      }
       if (url.endsWith('/permissions')) {
         return json(['users.read'])
       }
@@ -310,6 +313,9 @@ describe('shell project entry', () => {
           features: ['lead_management', 'project_management', 'records'],
         })
       }
+      if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+        return json({ module_permissions: ['crm.lead_management.read'] })
+      }
       if (url.endsWith('/permissions')) {
         return json(['crm.lead_management.read'])
       }
@@ -340,6 +346,9 @@ describe('shell project entry', () => {
           available: true,
           features: ['lead_management', 'project_management', 'records'],
         })
+      }
+      if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+        return json({ module_permissions: ['crm.project_management.access'] })
       }
       if (url.endsWith('/permissions')) {
         return json(['crm.project_management.access'])

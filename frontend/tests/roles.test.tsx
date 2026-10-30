@@ -603,6 +603,9 @@ it('shows CRM roles in the shell only when roles.manage is present', async () =>
     if (url.includes('/roles')) {
       return json({ items: [roleRecord()] })
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.project_management.access'] })
+    }
     if (url.endsWith('/permissions')) {
       return json(
         allowRoles

@@ -249,6 +249,18 @@ export function getPermissions(tenantId: string): Promise<string[]> {
   return request<string[]>(platformUrl(), `/api/v1/tenants/${tenantId}/permissions`)
 }
 
+export function getModulePermissions(tenantId: string): Promise<string[]> {
+  return request<{ module_permissions?: unknown }>(
+    crmUrl(),
+    `/api/v1/shell/tenants/${tenantId}`,
+  ).then((body) => {
+    if (!Array.isArray(body.module_permissions)) {
+      throw new ApiError(502, 'The request could not be completed.')
+    }
+    return body.module_permissions.filter((key): key is string => typeof key === 'string')
+  })
+}
+
 const BRAND_HEX = /^#[0-9A-Fa-f]{6}$/
 const PLATFORM_TEXT = '#3D4458'
 const PLATFORM_BACKGROUND = '#F7F8FB'

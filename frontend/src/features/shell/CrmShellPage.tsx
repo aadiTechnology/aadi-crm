@@ -14,14 +14,11 @@ import { LoadingSkeleton, NavIcon } from '@/ui/chrome'
 import {
   accessMessage,
   ApiError,
-  FEATURE_LEADS,
-  FEATURE_PROJECTS,
-  FEATURE_RECORDS,
   canOpenAudit,
-  canOpenProjects,
-  canOpenRecords,
-  featureEntitled,
+  canOpenProjects as projectsGranted,
+  canOpenRecords as recordsGranted,
   getLeads,
+  getModulePermissions,
   getPermissions,
   getProductAccess,
   LEADS_PERMISSION,
@@ -76,18 +73,6 @@ function failureMessage(error: unknown): string {
     return accessMessage(error.status)
   }
   return 'The request could not be completed.'
-}
-
-function leadsAllowed(access: ProductAccess, permissions: string[]): boolean {
-  return featureEntitled(access, FEATURE_LEADS) && permissions.includes(LEADS_PERMISSION)
-}
-
-function projectsAllowed(access: ProductAccess, permissions: string[]): boolean {
-  return featureEntitled(access, FEATURE_PROJECTS) && canOpenProjects(permissions)
-}
-
-function recordsAllowed(access: ProductAccess, permissions: string[]): boolean {
-  return featureEntitled(access, FEATURE_RECORDS) && canOpenRecords(permissions)
 }
 
 function auditAllowed(access: ProductAccess, permissions: string[]): boolean {
@@ -304,11 +289,14 @@ export function CrmShellPage() {
           }
           return
         }
-        const permissions = await getPermissions(tenantId)
-        const branding = await readBranding(tenantId)
-        const canOpenLeads = leadsAllowed(access, permissions)
-        const canOpenProjects = projectsAllowed(access, permissions)
-        const canOpenRecords = recordsAllowed(access, permissions)
+        const [permissions, modulePermissions, branding] = await Promise.all([
+          getPermissions(tenantId),
+          getModulePermissions(tenantId),
+          readBranding(tenantId),
+        ])
+        const canOpenLeads = modulePermissions.includes(LEADS_PERMISSION)
+        const canOpenProjects = projectsGranted(modulePermissions)
+        const canOpenRecords = recordsGranted(modulePermissions)
         const canOpenAudit = auditAllowed(access, permissions)
         const canManageRoles = rolesAllowed(permissions)
         const canReadUsers = permissions.includes(USERS_READ_PERMISSION)

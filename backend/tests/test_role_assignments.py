@@ -500,3 +500,99 @@ def test_record_scope_survives_a_control_plane_manage_key(tmp_path, monkeypatch)
         json={"name": "Member cannot rename"},
     )
     assert member_update.status_code == 403
+
+
+def test_shell_module_permissions_follow_effective_role_rules(tmp_path, monkeypatch) -> None:
+    platform = FakePlatform()
+    _grant_admin(platform)
+    platform.users_by_tenant[str(TENANT_A)] = [
+        _person(USER_ID, "manager@example.com", membership_id=MEMBERSHIP_ID),
+        _person(OTHER_ID, "member@example.com", membership_id=OTHER_MEMBERSHIP),
+    ]
+    client = _client(tmp_path, monkeypatch, platform)
+    unassigned = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert unassigned.status_code == 200
+    assert unassigned.json()["module_permissions"] == [
+        LEADS,
+        PROJECT_ACCESS,
+        MANAGE,
+        RECORDS_ACCESS,
+    ]
+    platform.access_by_tenant[str(TENANT_A)] = _access(
+        TENANT_A,
+        membership_id=MEMBERSHIP_ID,
+        features=("lead_management", "project_management"),
+    )
+    without_records = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert without_records.status_code == 200
+    assert without_records.json()["module_permissions"] == [LEADS, PROJECT_ACCESS, MANAGE]
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=MEMBERSHIP_ID)
+
+    leads_role = _role(client, "Leads desk")
+    project_role = _role(client, "Project desk")
+    _grant(client, leads_role, LEADS)
+    _grant(client, project_role, PROJECT_ACCESS)
+    _grant(client, project_role, RECORDS_ACCESS)
+    assert _assign(client, leads_role).status_code == 201
+    assert _assign(client, project_role).status_code == 201
+
+    _become(platform, OTHER_ID, "member@example.com")
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=OTHER_MEMBERSHIP)
+    platform.permissions_by_tenant[str(TENANT_A)] = [
+        LEADS,
+        PROJECT_ACCESS,
+        RECORDS_ACCESS,
+        MANAGE,
+        ROLES_MANAGE,
+        USERS_READ,
+        "audit.read",
+    ]
+    combined = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert combined.status_code == 200
+    assert combined.json()["module_permissions"] == [LEADS, PROJECT_ACCESS, RECORDS_ACCESS]
+
+    _become(platform, USER_ID, "manager@example.com")
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=MEMBERSHIP_ID)
+    platform.permissions_by_tenant[str(TENANT_A)] = [
+        ROLES_MANAGE,
+        USERS_READ,
+        LEADS,
+        PROJECT_ACCESS,
+        RECORDS_ACCESS,
+        MANAGE,
+    ]
+    revoked = client.post(
+        f"/api/v1/tenants/{TENANT_A}/roles/{leads_role}/assignments/remove",
+        headers=_headers(write=True),
+        json={"user_id": OTHER_ID},
+    )
+    assert revoked.status_code == 200
+    _become(platform, OTHER_ID, "member@example.com")
+    platform.access_by_tenant[str(TENANT_A)] = _access(TENANT_A, membership_id=OTHER_MEMBERSHIP)
+    platform.permissions_by_tenant[str(TENANT_A)] = [
+        LEADS,
+        PROJECT_ACCESS,
+        RECORDS_ACCESS,
+        MANAGE,
+        ROLES_MANAGE,
+    ]
+    narrowed = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert narrowed.json()["module_permissions"] == [PROJECT_ACCESS, RECORDS_ACCESS]
+    assert client.get(f"/api/v1/shell/tenants/{TENANT_A}/leads").status_code == 403
+
+    connection = connect(database_path())
+    connection.execute(
+        "UPDATE tenant_role_assignments SET tenant_membership_id = ? WHERE user_id = ?",
+        (REPLACEMENT_MEMBERSHIP, OTHER_ID),
+    )
+    connection.commit()
+    connection.close()
+    stale = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert stale.status_code == 200
+    assert stale.json()["module_permissions"] == []
+    assert client.get(f"/api/v1/shell/tenants/{TENANT_A}/leads").status_code == 403
+
+    platform.access_by_tenant[str(TENANT_A)] = PlatformCallError(404)
+    missing = client.get(f"/api/v1/shell/tenants/{TENANT_A}")
+    assert missing.status_code == 404
+    assert "module_permissions" not in missing.text

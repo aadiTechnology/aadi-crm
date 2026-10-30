@@ -9,10 +9,25 @@ from fastapi.responses import JSONResponse
 
 from app.db import open_database
 from app.platform_client import PlatformCallError, PlatformClient
-from app.project_access import FEATURE_LEADS, FEATURE_RECORDS, records_module_allowed
+from app.project_access import (
+    FEATURE_LEADS,
+    FEATURE_PROJECTS,
+    FEATURE_RECORDS,
+    PROJECT_ACCESS_PERMISSION,
+    PROJECT_MANAGE_PERMISSION,
+    RECORDS_ACCESS_PERMISSION,
+    SUPPORTED_CRM_PERMISSIONS,
+    records_module_allowed,
+)
 from app.roles_store import module_keys_for_member
 
 LEADS_PERMISSION = "crm.lead_management.read"
+_MODULE_FEATURES = {
+    LEADS_PERMISSION: FEATURE_LEADS,
+    PROJECT_ACCESS_PERMISSION: FEATURE_PROJECTS,
+    PROJECT_MANAGE_PERMISSION: FEATURE_PROJECTS,
+    RECORDS_ACCESS_PERMISSION: FEATURE_RECORDS,
+}
 
 router = APIRouter(prefix="/api/v1/shell", tags=["shell"])
 
@@ -46,6 +61,34 @@ def _cookie(request: Request) -> str | None:
     return header
 
 
+def _module_permissions(tenant_id: UUID, request: Request, platform: PlatformClient, access):
+    """Catalog keys the shell may show. Platform administration keys stay out of this list."""
+
+    if not access.available:
+        return [], None
+    cookie = _cookie(request)
+    try:
+        plane = platform.permissions(str(tenant_id), cookie)
+        identity = platform.identity(cookie)
+    except PlatformCallError as exc:
+        return None, _error(exc.status_code)
+    with open_database() as connection:
+        effective = module_keys_for_member(
+            connection,
+            tenant_id=str(tenant_id),
+            user_id=identity.user_id,
+            tenant_membership_id=access.membership_id,
+            control_plane_keys=plane,
+        )
+    entitled = set(access.features)
+    visible = [
+        key
+        for key in SUPPORTED_CRM_PERMISSIONS
+        if key in effective and _MODULE_FEATURES[key] in entitled
+    ]
+    return visible, None
+
+
 def _load_access(tenant_id: UUID, request: Request, platform: PlatformClient):
     try:
         access = platform.product_access(str(tenant_id), _cookie(request))
@@ -65,6 +108,9 @@ def read_shell(
     access, failure = _load_access(tenant_id, request, platform)
     if failure is not None or access is None:
         return failure if failure is not None else _error(404)
+    module_permissions, failure = _module_permissions(tenant_id, request, platform, access)
+    if failure is not None:
+        return failure
     return JSONResponse(
         status_code=200,
         content={
@@ -72,6 +118,7 @@ def read_shell(
             "tenant_name": access.tenant_name,
             "product_name": access.product_name,
             "available": access.available,
+            "module_permissions": module_permissions,
         },
     )
 

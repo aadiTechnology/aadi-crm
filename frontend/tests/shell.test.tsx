@@ -127,6 +127,9 @@ it('hides leads when the product is unavailable', async () => {
     if (url.endsWith('/api/v1/auth/me')) {
       return json(identity())
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: [] })
+    }
     if (url.endsWith('/products/crm/access')) {
       return json(access(false))
     }
@@ -153,6 +156,9 @@ it('closes the navigation with Escape and returns focus to the menu button', asy
     const url = String(input)
     if (url.endsWith('/api/v1/auth/me')) {
       return json(identity())
+    }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: [] })
     }
     if (url.endsWith('/products/crm/access')) {
       return json(access(false))
@@ -181,6 +187,9 @@ it('hides leads when the plan does not entitle lead management', async () => {
     if (url.endsWith('/api/v1/auth/me')) {
       return json(identity())
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: [] })
+    }
     if (url.endsWith('/products/crm/access')) {
       return json(access(true, TENANT, ['project_management', 'records']))
     }
@@ -206,6 +215,11 @@ it('hides records when the plan does not entitle records and still shows project
     const url = String(input)
     if (url.endsWith('/api/v1/auth/me')) {
       return json(identity())
+    }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({
+        module_permissions: ['crm.lead_management.read', 'crm.project_management.access'],
+      })
     }
     if (url.endsWith('/products/crm/access')) {
       return json(access(true, TENANT, ['lead_management', 'project_management']))
@@ -234,6 +248,9 @@ it('hides leads when the permission is missing and the stub denies a direct visi
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: [] })
+    }
     if (url.endsWith('/permissions')) {
       return json(['users.read'])
     }
@@ -261,6 +278,9 @@ it('shows leads only after both checks and an empty stub', async () => {
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.lead_management.read'] })
+    }
     if (url.endsWith('/permissions')) {
       return json(['crm.lead_management.read'])
     }
@@ -287,6 +307,11 @@ it('shows an empty leads list without pretending the shell has no records', asyn
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({
+        module_permissions: ['crm.lead_management.read', 'crm.records.access'],
+      })
+    }
     if (url.endsWith('/permissions')) {
       return json(['crm.lead_management.read', 'crm.records.access'])
     }
@@ -312,6 +337,11 @@ it('lists authorized project records on the leads page', async () => {
     }
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
+    }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({
+        module_permissions: ['crm.lead_management.read', 'crm.records.access'],
+      })
     }
     if (url.endsWith('/permissions')) {
       return json(['crm.lead_management.read', 'crm.records.access'])
@@ -364,6 +394,9 @@ it('lets branding colors win over brand tokens and keeps an unreadable pair off 
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.lead_management.read'] })
+    }
     if (url.endsWith('/permissions')) {
       return json(['crm.lead_management.read'])
     }
@@ -405,6 +438,9 @@ it('uses a brand token primary and ignores text that fails on its background', a
     if (url.endsWith('/products/crm/access')) {
       return json(access(true))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.lead_management.read'] })
+    }
     if (url.endsWith('/permissions')) {
       return json(['crm.lead_management.read'])
     }
@@ -436,6 +472,9 @@ it('shows Audit only when audit.read is granted', async () => {
     if (url.endsWith('/products/crm/access')) {
       return json(access(true, TENANT, ['lead_management']))
     }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.project_management.access'] })
+    }
     if (url.endsWith('/permissions')) {
       return json(['crm.project_management.access'])
     }
@@ -460,6 +499,9 @@ it('shows Audit only when audit.read is granted', async () => {
     }
     if (url.endsWith('/products/crm/access')) {
       return json(access(true, TENANT, ['lead_management']))
+    }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: [] })
     }
     if (url.endsWith('/permissions')) {
       return json(['audit.read'])
@@ -490,6 +532,38 @@ it('shows Audit only when audit.read is granted', async () => {
   renderAt(`/tenants/${TENANT}/audit`)
   expect(await screen.findByRole('link', { name: 'Audit' })).toBeInTheDocument()
   expect(await screen.findByText('Visible event')).toBeInTheDocument()
+})
+
+it('hides a module the backend omits even when the platform permission list still contains it', async () => {
+  asFetch().mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/v1/auth/me')) {
+      return json(identity())
+    }
+    if (url.endsWith(`/api/v1/shell/tenants/${TENANT}`)) {
+      return json({ module_permissions: ['crm.project_management.access'] })
+    }
+    if (url.endsWith('/products/crm/access')) {
+      return json(access(true))
+    }
+    if (url.endsWith('/permissions')) {
+      return json(['crm.lead_management.read', 'roles.manage', 'users.read', 'audit.read'])
+    }
+    if (url.endsWith('/configuration')) {
+      return json({}, 404)
+    }
+    if (url.includes('/leads')) {
+      return json({ error: { message: OTHER }, items: [{ name: 'Hidden lead' }] }, 403)
+    }
+    return json({}, 500)
+  })
+  renderAt(`/tenants/${TENANT}/leads`)
+  expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to perform this action.')
+  expect(screen.queryByRole('link', { name: 'Leads' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Projects' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'CRM roles' })).toBeInTheDocument()
+  expect(screen.queryByText('Hidden lead')).not.toBeInTheDocument()
+  expect(screen.queryByText(OTHER)).not.toBeInTheDocument()
 })
 
 function shellStyle(): CSSStyleDeclaration {
