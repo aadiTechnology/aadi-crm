@@ -715,7 +715,7 @@ def test_postgres_unassigned_access_and_project_binding_stay_enforced(crm: CrmPo
     assert hidden.status_code == 200
     assert hidden.json()["items"] == []
     assert "Manager kept it" not in hidden.text
-    assert MANAGE not in _effective_keys(tenant_id, subject, subject_membership, [PROJECT_ACCESS, MANAGE])
+    assert _effective_keys(tenant_id, subject, subject_membership, [PROJECT_ACCESS]) == [PROJECT_ACCESS]
 
     _as_caller(
         crm.platform,
